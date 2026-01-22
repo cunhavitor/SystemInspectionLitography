@@ -53,8 +53,13 @@ class InspectionWorker(QThread):
             year_dir = start_time_dt.strftime("%Y")
             month_dir = start_time_dt.strftime("%m")
             
-            defects_base = 'defects'
+            defects_base = os.path.join('data', 'defects')
             defects_dir = os.path.join(defects_base, year_dir, month_dir)
+            
+            # Ensure data directory exists
+            if not os.path.exists('data'):
+                os.makedirs('data')
+                
             os.makedirs(defects_dir, exist_ok=True)
             timestamp = start_time_dt.strftime("%Y%m%d_%H%M%S")
             start_time_str = start_time_dt.strftime("%H:%M:%S")
@@ -294,8 +299,11 @@ class LogsDialog(QDialog):
         layout.addLayout(btn_layout)
 
 class DefectsGalleryDialog(QDialog):
-    def __init__(self, defects_dir="defects", parent=None):
+    def __init__(self, defects_dir=None, parent=None):
         super().__init__(parent)
+        if defects_dir is None:
+            defects_dir = os.path.join('data', 'defects')
+            
         self.setWindowTitle("Galeria de Defeitos")
         self.resize(1100, 700)
         
@@ -1537,7 +1545,7 @@ class InspectionWindow(QMainWindow):
 
     def open_defects_gallery(self):
         """Open the defects gallery dialog"""
-        dlg = DefectsGalleryDialog(defects_dir='defects', parent=self)
+        dlg = DefectsGalleryDialog(defects_dir=os.path.join('data', 'defects'), parent=self)
         dlg.exec()
 
     def update_threshold(self, value):

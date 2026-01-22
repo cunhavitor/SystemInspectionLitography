@@ -162,7 +162,7 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
                 now = datetime.now()
                 year_dir = now.strftime("%Y")
                 month_dir = now.strftime("%m")
-                save_dir = os.path.join("defects", year_dir, month_dir)
+                save_dir = os.path.join("data", "defects", year_dir, month_dir)
                 os.makedirs(save_dir, exist_ok=True)
                 
                 defect_filename = os.path.join(save_dir, f"NOK_{timestamp}_can{can_id}_score{score:.2f}.png")
