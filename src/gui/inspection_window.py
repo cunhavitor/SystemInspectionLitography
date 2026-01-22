@@ -5,8 +5,8 @@ from matplotlib.figure import Figure
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QLabel, QPushButton, QStatusBar, QFrame, QGroupBox,
                                QListWidget, QListWidgetItem, QDoubleSpinBox, QSplitter, 
-                               QGridLayout, QDialog, QProgressBar)
-from PySide6.QtCore import Qt, QTimer, QSize, QThread, Signal
+                               QGridLayout, QDialog, QProgressBar, QTreeView, QFileSystemModel, QHeaderView)
+from PySide6.QtCore import Qt, QTimer, QSize, QThread, Signal, QDir
 from PySide6.QtGui import QImage, QPixmap, QFont, QColor
 from ..camera import Camera
 from .camera_thread import CameraThread
@@ -298,35 +298,73 @@ class DefectsGalleryDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Galeria de Defeitos")
         self.resize(1100, 700)
-        self.defects_dir = defects_dir
+        
+        # Ensure absolute path for QFileSystemModel
+        self.defects_dir = os.path.abspath(defects_dir)
+        if not os.path.exists(self.defects_dir):
+            os.makedirs(self.defects_dir)
+            
         self.setStyleSheet("""
             QDialog { background-color: #0D1117; color: #E6EDF3; }
-            QListWidget {
+            QTreeView {
                 background-color: #161B22; 
                 border: 1px solid #30363D;
                 border-radius: 6px;
                 color: #E6EDF3;
-                font-family: monospace;
+                font-family: 'Segoe UI', sans-serif;
             }
-            QListWidget::item { padding: 8px; border-bottom: 1px solid #21262D; }
-            QListWidget::item:selected { background-color: #1F6FEB; color: white; }
+            QTreeView::item { 
+                padding: 4px; 
+                border-bottom: 0px; 
+            }
+            QTreeView::item:selected { 
+                background-color: #1F6FEB; 
+                color: white; 
+            }
+            QTreeView::item:hover { 
+                background-color: #21262D; 
+            }
+            QHeaderView::section {
+                background-color: #161B22;
+                color: #8B949E;
+                padding: 4px;
+                border: 1px solid #30363D;
+            }
             QLabel { color: #E6EDF3; }
         """)
         
         layout = QHBoxLayout(self)
         
-        # Left: List
+        # Left: File Tree
         left_panel = QVBoxLayout()
-        self.list_widget = QListWidget()
-        self.list_widget.setFixedWidth(450)
-        self.list_widget.itemClicked.connect(self.show_image)
-        left_panel.addWidget(QLabel("Lista de Defeitos (Mais recentes primeiro):"))
-        left_panel.addWidget(self.list_widget)
+        left_panel.addWidget(QLabel("Navegação (Ano / Mês):"))
+        
+        self.file_model = QFileSystemModel()
+        self.file_model.setRootPath(self.defects_dir)
+        self.file_model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs | QDir.Files)
+        self.file_model.setNameFilters(["*.png", "*.jpg", "*.jpeg"])
+        self.file_model.setNameFilterDisables(False) # Hide files that don't match
+        
+        self.tree_view = QTreeView()
+        self.tree_view.setModel(self.file_model)
+        self.tree_view.setRootIndex(self.file_model.index(self.defects_dir))
+        self.tree_view.setFixedWidth(400)
+        
+        # Hide unnecessary columns (Size, Type, Date) - keep Name
+        self.tree_view.setColumnHidden(1, True)
+        self.tree_view.setColumnHidden(2, True)
+        self.tree_view.setColumnHidden(3, True)
+        self.tree_view.header().setVisible(False)
+        
+        # Connect Selection
+        self.tree_view.selectionModel().selectionChanged.connect(self.on_selection_changed)
+        
+        left_panel.addWidget(self.tree_view)
         layout.addLayout(left_panel)
         
         # Right: Image Preview
         right_panel = QVBoxLayout()
-        self.image_label = QLabel("Selecione um defeito para visualizar")
+        self.image_label = QLabel("Selecione uma imagem")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setStyleSheet("background-color: #010409; border: 1px solid #30363D; border-radius: 6px;")
         
@@ -337,66 +375,20 @@ class DefectsGalleryDialog(QDialog):
         right_panel.addWidget(self.image_label)
         layout.addLayout(right_panel)
         
-        self.load_defects()
-        
-    def load_defects(self):
-        if not os.path.exists(self.defects_dir):
-            self.list_widget.addItem("Diretoria de defeitos não encontrada.")
-            return
+    def on_selection_changed(self, selected, deselected):
+        indexes = self.tree_view.selectionModel().selectedIndexes()
+        if indexes:
+            # Column 0 is the Name column
+            index = indexes[0]
+            file_path = self.file_model.filePath(index)
             
-        try:
-            files = []
-            for root, dirs, filenames in os.walk(self.defects_dir):
-                for f in filenames:
-                    if f.endswith('.png') and f.startswith('NOK'):
-                        # Store relative path from defects_dir or absolute?
-                        # Let's store full path in the item data, but use filename for sorting/display logic if needed
-                        full_path = os.path.join(root, f)
-                        files.append(full_path)
-            
-            # Sort by filename (which contains timestamp) reverse
-            # Filenames are like NOK_YYYYMMDD_... so sorting by filename works for date
-            files.sort(key=lambda x: os.path.basename(x), reverse=True)
-            
-            for full_path in files:
-                f = os.path.basename(full_path)
-                try:
-                    parts = f.replace('.png', '').split('_')
-                    if "QUALITY" in f:
-                        # NOK_QUALITY_20250121_153000_can01_bright190.0.png
-                        date_str = f"{parts[2]} {parts[3]}"
-                        can = parts[4].replace('can', '')
-                        val = parts[5].replace('bright', '')
-                        reason = f"Qualidade (Brilho {val})"
-                        icon = "🔵"
-                    else:
-                        # NOK_20250121_153000_can01_score0.95.png
-                        date_str = f"{parts[1]} {parts[2]}"
-                        can = parts[3].replace('can', '')
-                        val = parts[4].replace('score', '')
-                        reason = f"Defeito (Score {val})"
-                        icon = "🔴"
-                    
-                    dt = datetime.strptime(date_str, "%Y%m%d %H%M%S")
-                    fmt_date = dt.strftime("%d/%m %H:%M:%S")
-                    
-                    display_text = f"{icon} {fmt_date} | Can #{can} | {reason}"
-                    
-                    item = QListWidgetItem(display_text)
-                    item.setData(Qt.UserRole, full_path)
-                    self.list_widget.addItem(item)
-                    
-                except Exception as e:
-                    # Fallback
-                    item = QListWidgetItem(f"❓ {f}")
-                    item.setData(Qt.UserRole, os.path.join(self.defects_dir, f))
-                    self.list_widget.addItem(item)
-                    
-        except Exception as e:
-             self.list_widget.addItem(f"Erro ao ler diretoria: {e}")
+            if os.path.isfile(file_path) and file_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+                self.show_image(file_path)
+            else:
+                self.image_label.setText("Selecione uma imagem")
+                self.image_label.setPixmap(QPixmap()) # Clear
 
-    def show_image(self, item):
-        path = item.data(Qt.UserRole)
+    def show_image(self, path):
         if path and os.path.exists(path):
             pixmap = QPixmap(path)
             if not pixmap.isNull():
@@ -410,8 +402,13 @@ class DefectsGalleryDialog(QDialog):
             self.image_label.setText("Ficheiro não encontrado.")
             
     def resizeEvent(self, event):
-        if self.list_widget.currentItem():
-            self.show_image(self.list_widget.currentItem())
+        # Refresh current image on resize
+        indexes = self.tree_view.selectionModel().selectedIndexes()
+        if indexes:
+            index = indexes[0]
+            file_path = self.file_model.filePath(index)
+            if os.path.isfile(file_path):
+                 self.show_image(file_path)
         super().resizeEvent(event)
 
 class CanDetailDialog(QDialog):
@@ -508,9 +505,10 @@ class CanDetailDialog(QDialog):
         layout.addLayout(data_layout)
 
 class InspectionWindow(QMainWindow):
-    def __init__(self, config, dashboard=None):
+    def __init__(self, config, user_manager, dashboard=None):
         super().__init__()
         self.config = config
+        self.user_manager = user_manager
         self.dashboard = dashboard
         self.camera = None
         self.camera_thread = None
@@ -525,6 +523,12 @@ class InspectionWindow(QMainWindow):
         self.last_clean_image = None # For live threshold updates
         self.last_results_data = []  # For live threshold updates
         self.is_running = False # Start/Stop state
+        
+        # Inspection Trigger Logic
+        self.pending_inspection = False
+        self.inspection_timeout_timer = QTimer(self)
+        self.inspection_timeout_timer.setSingleShot(True)
+        self.inspection_timeout_timer.timeout.connect(self.on_inspection_timeout)
         
         # Load Aligner
         self.aligner = None
@@ -804,6 +808,7 @@ class InspectionWindow(QMainWindow):
         self.btn_defects.clicked.connect(self.open_defects_gallery)
         left_layout.addWidget(self.btn_defects)
         
+        
         left_layout.addStretch() # Push everything up
         
         # --- CENTER PANEL (Camera) ---
@@ -903,6 +908,11 @@ class InspectionWindow(QMainWindow):
             
         self.threshold_spinbox.valueChanged.connect(self.update_threshold)
         
+        # Access Control: Disable threshold adjustment for Operators
+        if self.user_manager.current_user.role not in ['admin', 'tecnico']:
+            self.threshold_spinbox.setEnabled(False)
+            self.threshold_spinbox.setToolTip("Apenas Master/Técnico podem ajustar o limiar.")
+        
         thresh_layout.addWidget(thresh_label)
         thresh_layout.addWidget(self.threshold_spinbox)
         thresh_layout.addStretch()
@@ -963,6 +973,12 @@ class InspectionWindow(QMainWindow):
         self.btn_logs.setStyleSheet("border: 1px solid #30363D; color: #8B949E;") 
         self.btn_logs.clicked.connect(self.open_logs_dialog)
         right_layout.addWidget(self.btn_logs)
+        
+        # Access Control: Hide Logs and Defects for Operators
+        # Only Master and Tecnico can see these sensitive debugging/historical tools
+        if self.user_manager.current_user.role not in ['admin', 'tecnico']:
+            self.btn_logs.hide()
+            self.btn_defects.hide()
 
         # Hidden Log List (Keep object alive for logic compatibility)
         self.log_list = QListWidget() 
@@ -1075,7 +1091,8 @@ class InspectionWindow(QMainWindow):
             self.camera_thread = CameraThread(self.camera, target_size=(640, 480))
             self.camera_thread.use_high_res = True # FORCE HIGH RES for Inspection
             self.camera_thread.frame_captured.connect(self.update_frame)
-            self.camera_thread.start()
+            # MOVED start() to AFTER warmup to prevent resource contention
+            # self.camera_thread.start() 
             self.camera.load_parameters()
             
             # Warmup to settle Auto-Exposure
@@ -1095,6 +1112,9 @@ class InspectionWindow(QMainWindow):
                 
             self.camera.warmup(30, callback=update_progress)
             
+            # NOW start the thread safely
+            self.camera_thread.start()
+            
             self.warmup_progress.hide()
             self.status_bar.showMessage("Câmara Pronta", 2000)
         except Exception as e:
@@ -1104,9 +1124,16 @@ class InspectionWindow(QMainWindow):
     def update_frame(self, qt_image, sharpness, raw_frame):
         # Update internal frame for capture, but DO NOT update UI (Live View Disabled)
         if self.camera_thread and not self.camera_thread.paused:
+            # print("DEBUG: update_frame received") # Too spammy, rely on thread log
             self.current_frame = raw_frame
-            # self.video_label.setPixmap(QPixmap.fromImage(qt_image)) 
             
+            # Check if we are waiting for a frame to inspect
+            # Check if we are waiting for a frame to inspect
+            if self.pending_inspection:
+                self.pending_inspection = False
+                self.inspection_timeout_timer.stop()
+                self._start_inspection()
+
             # Optional: Show a static "Ready" placeholder if not already set? 
             # For now, we just don't show the live stream.
 
@@ -1162,8 +1189,24 @@ class InspectionWindow(QMainWindow):
                 return
                 
             # Briefly unpause to get fresh frame (camera keeps updating current_frame in background)
+            # Briefly unpause to get fresh frame (camera keeps updating current_frame in background)
             self.camera_thread.paused = False
-            QTimer.singleShot(100, self._start_inspection)  # Small delay to ensure frame update
+            
+            # Set flag to capture NEXT available frame in update_frame
+            self.pending_inspection = True
+            
+            # Start safety timeout (2 seconds)
+            self.inspection_timeout_timer.start(2000) 
+            self.status_bar.showMessage("A aguardar frame...", 2000)
+            
+    def on_inspection_timeout(self):
+        """Called if no frame arrives within timeout period"""
+        self.pending_inspection = False
+        self.status_bar.showMessage("Erro: Timeout ao aguardar frame da câmara.", 4000)
+        # Ensure we don't leave camera running if we wanted to stop it? 
+        # Actually logic is we want it running to get a frame. 
+        # But if it failed, maybe we should repause if that was the intent, 
+        # but here we just leave it as is or user can try again.
             
     def _start_inspection(self):
         """Helper to start inspection with captured frame"""

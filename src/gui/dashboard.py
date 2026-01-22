@@ -139,7 +139,7 @@ class DashboardWindow(QMainWindow):
     def open_inspection(self):
         self.hide()
         if self.inspection_window is None:
-            self.inspection_window = InspectionWindow(self.config, self)
+            self.inspection_window = InspectionWindow(self.config, self.user_manager, self)
         self.inspection_window.show()
         if self.windowState() == Qt.WindowMaximized:
             self.inspection_window.showMaximized()
@@ -159,6 +159,16 @@ class DashboardWindow(QMainWindow):
         dialog.exec()
         
     def logout(self):
+        # Explicitly close inspection window to release camera resources
+        if self.inspection_window is not None:
+            # Force stop inspection to bypass closeEvent confirmation dialog
+            # and ensure camera is released immediately
+            if hasattr(self.inspection_window, 'is_running'):
+                 self.inspection_window.is_running = False
+            
+            self.inspection_window.close()
+            self.inspection_window = None
+            
         self.user_manager.logout()
         self.close()
         # Initial login window showing logic handled by main.py

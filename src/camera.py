@@ -83,20 +83,28 @@ class Camera:
                 try:
                     frame = self.picam.capture_array(actual_stream)
                 except KeyError:
-                    if actual_stream == 'lores':
-                        print("Warning: 'lores' stream missing, falling back to 'main'")
-                        frame = self.picam.capture_array('main')
-                    else:
-                        raise
+                    # Only print this warning once to avoid spamming
+                    if not hasattr(self, '_logged_stream_missing'):
+                        print(f"Warning: '{actual_stream}' stream missing, falling back to 'main'")
+                        self._logged_stream_missing = True
+                        
+                    frame = self.picam.capture_array('main')
                 
                 # Ensure frame is in RGB format
                 if len(frame.shape) == 2:
                     # Grayscale, convert to RGB
-                    import numpy as np
                     frame = np.stack([frame, frame, frame], axis=-1)
                 return frame
             except Exception as e:
-                print(f"Error capturing from stream '{stream_name}': {e}")
+                # Debounce error printing
+                if not hasattr(self, '_last_error_time'):
+                    import time
+                    self._last_error_time = 0
+                
+                import time
+                if time.time() - self._last_error_time > 2.0:
+                    print(f"Error capturing from stream '{stream_name}': {e}")
+                    self._last_error_time = time.time()
                 return None
         else:
             # OpenCV fallback - stream_name ignored, always main stream
