@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QLabel, QPushButton, QGridLayout, QMessageBox, QSizePolicy)
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from .user_management import UserManagementDialog
 from .inspection_window import InspectionWindow
 from .dataset_window import DatasetWindow
@@ -14,7 +15,7 @@ class DashboardWindow(QMainWindow):
         
         self.inspection_window = None # Persist inspection window
         
-        self.setWindowTitle("Inspection System - Dashboard")
+        self.setWindowTitle("System Inspection Litography - Dashboard")
         self.resize(800, 600)
         
         self._setup_ui()
@@ -28,9 +29,22 @@ class DashboardWindow(QMainWindow):
         main_layout.setContentsMargins(40, 40, 40, 40)
         
         # Header
+        # Header
         header = QHBoxLayout()
-        warning_icon = "👁️" # Unicode icon
-        title = QLabel(f"{warning_icon} Inspection System")
+        header.setSpacing(15) # Add spacing between logo and text
+        
+        # Logo Image
+        logo_label = QLabel()
+        logo_pixmap = QPixmap("logo.png")
+        if not logo_pixmap.isNull():
+            # Scale to height of 48px to match icon size
+            logo_label.setPixmap(logo_pixmap.scaledToHeight(48, Qt.SmoothTransformation))
+            header.addWidget(logo_label)
+        else:
+            # Fallback if image not found
+            header.addWidget(QLabel("👁️"))
+
+        title = QLabel("System Inspection Litography")
         title.setObjectName("titleLabel") # For QSS
         header.addWidget(title)
         

@@ -53,7 +53,7 @@ class MainWindow(QMainWindow):
         self.camera = None
         self.camera_thread = None
         
-        self.setWindowTitle(f"Inspection Vision - User: {user_manager.current_user.username}")
+        self.setWindowTitle(f"System Inspection Litography - User: {user_manager.current_user.username}")
         self.resize(800, 600)
         
         self._setup_ui()

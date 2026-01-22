@@ -1,6 +1,7 @@
 import sys
 import yaml
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QIcon
 from qt_material import apply_stylesheet
 
 from src.auth import UserManager
@@ -15,8 +16,18 @@ def load_config(path="config/settings.yaml"):
         print(f"Error: Config file not found at {path}")
         sys.exit(1)
 
+import os
+
 def main():
     app = QApplication(sys.argv)
+    
+    # 1. fix: Link the running app to the .desktop file so the taskbar uses that icon
+    app.setDesktopFileName("System Inspection Litography.desktop")
+    
+    # 2. fix: Use absolute path to ensure icon loads regardless of where script is run
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    icon_path = os.path.join(project_dir, "icon.png")
+    app.setWindowIcon(QIcon(icon_path))
     
     # Load Config and User Manager
     config = load_config()

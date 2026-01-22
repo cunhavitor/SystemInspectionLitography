@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=System Inspection Litography
+Comment=Visual Inspection System for Cans
+Exec=/home/cunhav/projects/InspectionVisionCamera/run_app.sh
+Icon=inspection-camera-final
+Path=/home/cunhav/projects/InspectionVisionCamera
+Terminal=false
+Categories=Utility;Engineering;
+StartupNotify=true
