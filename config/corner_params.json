@@ -1,0 +1,9 @@
+{
+    "roi_size": 117,
+    "margin_top": 171,
+    "margin_bottom": 122,
+    "margin_left": 250,
+    "margin_right": 449,
+    "dist_TL_BL": 226,
+    "dist_TR_BR": 170
+}

@@ -1,0 +1,12 @@
+numpy==2.2.2
+pillow==11.3.0
+opencv-python-headless==4.10.0.84
+ultralytics==8.3.197
+simplejpeg==1.8.2
+shapely==2.1.1
+matplotlib==3.10.6
+qt-material==2.1.0
+scikit-learn
+seaborn>=0.12.0
+pandas>=2.0.0
+pytz>=2023.0

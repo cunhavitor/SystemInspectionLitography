@@ -1,0 +1,17 @@
+camera:
+  index: 0
+  width: 4056
+  height: 3040
+  fps: 15
+
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  models: "models"
+
+inspection:
+  threshold: 0.8
+
+dataset:
+  output_width: 448
+  output_height: 448

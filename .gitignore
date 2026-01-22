@@ -1,0 +1,30 @@
+# Images
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.gif
+*.svg
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# OS
+.DS_Store
+
+# Debug/Temp
+debug_*
+output_viz.jpg
+
+# Large Data/Models
+*.zip
+*.pt
+*.bin
+*.onnx
+data/
+models/
