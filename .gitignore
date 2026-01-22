@@ -1,11 +1,9 @@
-# Images
-*.jpg
-*.jpeg
-*.png
-*.bmp
-*.tiff
-*.gif
-*.svg
+# Images (Allowed globally, use specific ignores if needed)
+# *.jpg
+# *.jpeg
+# *.png
+# *.bmp
+
 
 # Python
 __pycache__/
