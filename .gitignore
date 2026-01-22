@@ -27,4 +27,11 @@ output_viz.jpg
 *.bin
 *.onnx
 data/
-models/
+
+# Ignore models contents usually
+models/*
+!models/patchcore448_v2/
+
+# Whitelist required file types for this model
+!models/patchcore448_v2/*.bin
+!models/patchcore448_v2/*.onnx
