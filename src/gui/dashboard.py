@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QLabel, QPushButton, QGridLayout, QMessageBox, QSizePolicy)
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QPixmap, QIcon
+import os
 from .user_management import UserManagementDialog
 from .inspection_window import InspectionWindow
 from .dataset_window import DatasetWindow
@@ -154,6 +155,9 @@ class DashboardWindow(QMainWindow):
         self.hide()
         if self.inspection_window is None:
             self.inspection_window = InspectionWindow(self.config, self.user_manager, self)
+            # Set icon on inspection window
+            icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "icon.png")
+            self.inspection_window.setWindowIcon(QIcon(icon_path))
         self.inspection_window.show()
         if self.windowState() == Qt.WindowMaximized:
             self.inspection_window.showMaximized()
@@ -161,11 +165,17 @@ class DashboardWindow(QMainWindow):
     def open_dataset(self):
         self.hide()
         self.window = DatasetWindow(self.config, self)
+        # Set icon on dataset window
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "icon.png")
+        self.window.setWindowIcon(QIcon(icon_path))
         self.window.show()
         
     def open_adjustment(self):
         self.hide()
         self.window = AdjustmentWindow(self.config, self)
+        # Set icon on adjustment window
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "icon.png")
+        self.window.setWindowIcon(QIcon(icon_path))
         self.window.show()
         
     def open_users(self):

@@ -117,10 +117,10 @@ class InspectionWorker(QThread):
                 
                 # DEBUG: Log/Save if it's one of the first 3 cans OR specifically can 1
                 if i < 3 or can_id == 1:
-                    cv2.imwrite(f'debug_pi_can{can_id:02d}_1_raw_crop.png', can_img)
-                    cv2.imwrite(f'debug_pi_can{can_id:02d}_2_resized.png', resized_can)
-                    cv2.imwrite(f'debug_pi_can{can_id:02d}_3_aligned.png', aligned_can)
-                    cv2.imwrite(f'debug_pi_can{can_id:02d}_4_normalized.png', normalized_can)
+                    # cv2.imwrite(f'debug_pi_can{can_id:02d}_1_raw_crop.png', can_img)
+                    # cv2.imwrite(f'debug_pi_can{can_id:02d}_2_resized.png', resized_can)
+                    # cv2.imwrite(f'debug_pi_can{can_id:02d}_3_aligned.png', aligned_can)
+                    # cv2.imwrite(f'debug_pi_can{can_id:02d}_4_normalized.png', normalized_can)
                     
                     print(f"\n=== CAN {can_id} PREPROCESSING DEBUG ===")
                     print(f"1. Raw crop    - Shape: {can_img.shape}, Mean: {np.mean(can_img):.2f}")
