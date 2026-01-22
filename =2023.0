@@ -1,0 +1,11 @@
+Looking in indexes: https://pypi.org/simple, https://www.piwheels.org/simple
+Collecting openvino
+  Using cached openvino-2025.4.1-20426-cp311-cp311-manylinux_2_35_aarch64.whl.metadata (12 kB)
+Requirement already satisfied: numpy<2.4.0,>=1.16.6 in ./venv/lib/python3.11/site-packages (from openvino) (2.2.2)
+Collecting openvino-telemetry>=2023.2.1 (from openvino)
+  Using cached https://www.piwheels.org/simple/openvino-telemetry/openvino_telemetry-2025.2.0-py3-none-any.whl (25 kB)
+Requirement already satisfied: packaging in ./venv/lib/python3.11/site-packages (from openvino) (26.0)
+Using cached openvino-2025.4.1-20426-cp311-cp311-manylinux_2_35_aarch64.whl (28.3 MB)
+Installing collected packages: openvino-telemetry, openvino
+
+Successfully installed openvino-2025.4.1 openvino-telemetry-2025.2.0

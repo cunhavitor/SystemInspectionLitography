@@ -46,12 +46,16 @@ class InspectionWorker(QThread):
     def run(self):
         try:
             # Create defects directory if it doesn't exist
-            defects_dir = 'defects'
-            os.makedirs(defects_dir, exist_ok=True)
-            
+            # Create defects directory if it doesn't exist
             # Generate timestamp for this inspection
             from datetime import datetime
             start_time_dt = datetime.now()
+            year_dir = start_time_dt.strftime("%Y")
+            month_dir = start_time_dt.strftime("%m")
+            
+            defects_base = 'defects'
+            defects_dir = os.path.join(defects_base, year_dir, month_dir)
+            os.makedirs(defects_dir, exist_ok=True)
             timestamp = start_time_dt.strftime("%Y%m%d_%H%M%S")
             start_time_str = start_time_dt.strftime("%H:%M:%S")
             
@@ -341,10 +345,21 @@ class DefectsGalleryDialog(QDialog):
             return
             
         try:
-            files = [f for f in os.listdir(self.defects_dir) if f.endswith('.png') and f.startswith('NOK')]
-            files.sort(reverse=True)
+            files = []
+            for root, dirs, filenames in os.walk(self.defects_dir):
+                for f in filenames:
+                    if f.endswith('.png') and f.startswith('NOK'):
+                        # Store relative path from defects_dir or absolute?
+                        # Let's store full path in the item data, but use filename for sorting/display logic if needed
+                        full_path = os.path.join(root, f)
+                        files.append(full_path)
             
-            for f in files:
+            # Sort by filename (which contains timestamp) reverse
+            # Filenames are like NOK_YYYYMMDD_... so sorting by filename works for date
+            files.sort(key=lambda x: os.path.basename(x), reverse=True)
+            
+            for full_path in files:
+                f = os.path.basename(full_path)
                 try:
                     parts = f.replace('.png', '').split('_')
                     if "QUALITY" in f:
@@ -368,7 +383,7 @@ class DefectsGalleryDialog(QDialog):
                     display_text = f"{icon} {fmt_date} | Can #{can} | {reason}"
                     
                     item = QListWidgetItem(display_text)
-                    item.setData(Qt.UserRole, os.path.join(self.defects_dir, f))
+                    item.setData(Qt.UserRole, full_path)
                     self.list_widget.addItem(item)
                     
                 except Exception as e:

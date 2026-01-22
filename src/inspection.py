@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+from datetime import datetime
 from .camera import Camera
 from .can_process_img.detect_corner import CornerDetector
 from .can_process_img.rectified_sheet import SheetRectifier
@@ -157,7 +158,14 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
                 status = "NG"
                 
                 # Salvar imagem (Salvamos a versão CLAHE para perceber o que o modelo viu)
-                defect_filename = f"defects/NOK_{timestamp}_can{can_id}_score{score:.2f}.png"
+                # Create detailed timestamp structure
+                now = datetime.now()
+                year_dir = now.strftime("%Y")
+                month_dir = now.strftime("%m")
+                save_dir = os.path.join("defects", year_dir, month_dir)
+                os.makedirs(save_dir, exist_ok=True)
+                
+                defect_filename = os.path.join(save_dir, f"NOK_{timestamp}_can{can_id}_score{score:.2f}.png")
                 cv2.imwrite(defect_filename, img_clahe)
 
             # Desenhar na folha
