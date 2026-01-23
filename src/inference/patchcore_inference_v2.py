@@ -157,7 +157,7 @@ class PatchCoreInferencer:
         score, clean_map, viz = self.infer(image)
         # Usar o threshold configurado dinamicamente
         is_normal = score < self.threshold
-        return score, is_normal, viz
+        return score, is_normal, viz, clean_map
 
 if __name__ == "__main__":
     # Test block

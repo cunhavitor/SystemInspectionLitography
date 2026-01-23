@@ -30,7 +30,7 @@ import os
 from ..plc_control import PLCManager
 
 class InspectionWorker(QThread):
-    finished = Signal(object, dict, list, list, object) # qt_image, stats, logs, results_data, clean_image
+    finished = Signal(object, dict, list, list, object, float) # qt_image, stats, logs, results_data, clean_image, completion_time
     error = Signal(str)
     progress = Signal(str)
     # Changed: Added list of scores to the signal
@@ -47,6 +47,7 @@ class InspectionWorker(QThread):
         self.resizer = resizer
         self.normalizer = normalizer
         
+
     def run(self):
         try:
             # Create defects directory if it doesn't exist
@@ -61,6 +62,8 @@ class InspectionWorker(QThread):
             defects_dir = os.path.join(defects_base, year_dir, month_dir)
             
             # Ensure data directory exists
+            if not os.path.exists(defects_dir):
+                os.makedirs(defects_dir)
             if not os.path.exists('data'):
                 os.makedirs('data')
                 
@@ -166,7 +169,7 @@ class InspectionWorker(QThread):
                         return
                         
                     # Use aligned_can (Inferencer V2 handles CLAHE+Resize+Norm internaly)
-                    score, is_normal, heatmap = self.inferencer.predict(aligned_can)
+                    score, is_normal, viz, heatmap = self.inferencer.predict(aligned_can)
                     print(f"DEBUG: Can #{can_id} Score: {score:.8f}")
                     
                     can_duration = (time.time() - can_start_time) * 1000
@@ -235,7 +238,10 @@ class InspectionWorker(QThread):
             bytes_per_line = ch * w
             qt_image = QImage(rgb_sheet.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
             
-            self.finished.emit(qt_image, stats, logs, results_data, rectified)
+            # Capture completion time for accurate total time
+            completion_time = time.time()
+            
+            self.finished.emit(qt_image, stats, logs, results_data, rectified, completion_time)
             
         except Exception as e:
             import traceback
@@ -781,11 +787,17 @@ class CanDetailDialog(QDialog):
         layout.addLayout(data_layout)
 
 class InspectionWindow(QMainWindow):
+    # Signals
+    sig_plc_trigger = Signal() # Signal to bridge GPIO thread -> Qt Main Thread
+
     def __init__(self, config, user_manager, dashboard=None):
         super().__init__()
         self.config = config
         self.user_manager = user_manager
         self.dashboard = dashboard
+        
+        # Connect Signal
+        self.sig_plc_trigger.connect(self.trigger_inspection)
         
         # Determine User Role
         # Assuming user_manager has logged_in_user content or we get it from dashboard
@@ -815,8 +827,20 @@ class InspectionWindow(QMainWindow):
         # PLC Control
         self.plc = PLCManager()
         
+        # Connect PLC Trigger (Input 23)
+        if self.plc.in_trigger:
+            # We use a lambda to emit a signal or call a thread-safe method? 
+            # gpiozero callbacks run in a separate thread.
+            # We must use Qt signals to interact with UI/MainThread.
+            self.plc.in_trigger.when_activated = self.handle_plc_trigger
+            print("PLC Trigger Connected to Input 23")
+        else:
+            print("WARNING: PLC Input 23 (Trigger) not available")
+
         # Inspection Trigger Logic
         self.pending_inspection = False
+        self.trigger_time = None  # Track trigger time for first can timing
+        self.first_can_complete_time = None  # Track when first can completes
         self.inspection_timeout_timer = QTimer(self)
         self.inspection_timeout_timer.setSingleShot(True)
         self.inspection_timeout_timer.timeout.connect(self.on_inspection_timeout)
@@ -864,6 +888,7 @@ class InspectionWindow(QMainWindow):
         self.setWindowTitle("Inspection Dashboard")
         self.setFocusPolicy(Qt.StrongFocus) # Ensure window can catch key events
         self.resize(1280, 720)
+        self.showMaximized()  # Start window maximized
         
         self._setup_ui()
         # Delay camera start to allow UI to show 
@@ -1267,8 +1292,10 @@ class InspectionWindow(QMainWindow):
         self.lbl_stats_start = add_stat_row(1, "Início:", "--/-- --:--")
         self.lbl_stats_end   = add_stat_row(2, "Fim:", "--/-- --:--")
         self.lbl_stats_avg_time = add_stat_row(3, "Média Tempo:", "--ms")
-        self.lbl_stats_good_pct = add_stat_row(4, "Bons:", "0%")
-        self.lbl_stats_bad_pct  = add_stat_row(5, "Maus:", "0%")
+        self.lbl_stats_first_can = add_stat_row(4, "Tempo 1ª Lata:", "--ms")
+        self.lbl_stats_total_time = add_stat_row(5, "Tempo Total:", "--s")
+        self.lbl_stats_good_pct = add_stat_row(6, "Bons:", "0%")
+        self.lbl_stats_bad_pct  = add_stat_row(7, "Maus:", "0%")
         
         stats_group.setLayout(stats_layout)
         right_layout.addWidget(stats_group)
@@ -1701,6 +1728,10 @@ class InspectionWindow(QMainWindow):
             # Briefly unpause to get fresh frame (camera keeps updating current_frame in background)
             self.camera_thread.paused = False
             
+            # Capture trigger time for first can timing
+            import time
+            self.trigger_time = time.time()
+            
             # Set flag to capture NEXT available frame in update_frame
             self.pending_inspection = True
             
@@ -1750,6 +1781,11 @@ class InspectionWindow(QMainWindow):
 
     def on_progressive_update(self, qt_image, current, total, scores):
         """Update display progressively as cans are inspected"""
+        # Capture time when first can completes
+        if current == 1 and self.trigger_time is not None:
+            import time
+            self.first_can_complete_time = time.time()
+        
         self.update_image_display(qt_image)
         self.update_status(f"A Inspecionar... {current}/{total} latas", 500)
         self.update_graph(scores, self.threshold_spinbox.value())
@@ -1760,7 +1796,7 @@ class InspectionWindow(QMainWindow):
         if self.camera_thread:
             self.camera_thread.paused = False
 
-    def on_inspection_finished(self, qt_image, stats, logs, results_data, clean_image):
+    def on_inspection_finished(self, qt_image, stats, logs, results_data, clean_image, completion_time):
         self.update_status("Inspeção Concluída", 2000)
         
         # Store data for live visual updates
@@ -1820,6 +1856,22 @@ class InspectionWindow(QMainWindow):
         # self.lbl_stats_start.setText(f"Start: {start_time_str}")  # Disabled: User wants Session Start time, not Batch Start time 
         
         self.lbl_stats_avg_time.setText(f"{avg_time:.1f}ms")
+        
+        # Calculate time to first can (trigger to first can analysis complete)
+        if self.trigger_time and self.first_can_complete_time:
+            total_time_to_first = (self.first_can_complete_time - self.trigger_time) * 1000  # Convert to ms
+            self.lbl_stats_first_can.setText(f"{total_time_to_first:.0f}ms")
+        else:
+            self.lbl_stats_first_can.setText("--ms")
+        
+        # Calculate total inspection time (trigger to all cans complete)
+        # Use completion_time from worker instead of time.time() for accuracy
+        if self.trigger_time and completion_time:
+            total_inspection_time = completion_time - self.trigger_time  # Keep in seconds
+            self.lbl_stats_total_time.setText(f"{total_inspection_time:.3f}s")
+        else:
+            self.lbl_stats_total_time.setText("--s")
+        
         self.lbl_stats_good_pct.setText(f"{good_pct:.1f}%")
         self.lbl_stats_bad_pct.setText(f"{bad_pct:.1f}%")
         
@@ -2164,11 +2216,63 @@ class InspectionWindow(QMainWindow):
         threshold = self.threshold_spinbox.value()
         status = "OK" if score <= threshold else "NG"
         
+        # Prepare image for display: Draw Defect Circle if Heatmap provided
+        image = item.get('image')
+        heatmap = item.get('heatmap')
+        
+        display_img = image
+        if heatmap is not None and status == "NG":
+            try:
+                # Find location of max anomaly in heatmap
+                # Heatmap is 448x448 float array
+                h_map = heatmap
+                # print(f"DEBUG: Heatmap shape: {h_map.shape}, type: {h_map.dtype}")
+
+                if len(h_map.shape) > 2:
+                    h_map = h_map.squeeze() 
+                
+                # If still 3 dims, take first channel or max across channels? 
+                # Usually it's (H, W). If (H, W, 3), that's wrong for a single heatmap.
+                if len(h_map.shape) == 3:
+                     # If RGB heatmap was passed (mistake), convert to gray?
+                     # But PatchCore returns (1, H, W) usually.
+                     if h_map.shape[0] == 1:
+                         h_map = h_map[0]
+                     elif h_map.shape[2] == 1:
+                         h_map = h_map[:, :, 0]
+                     else:
+                         # Fallback: take max across channels
+                         h_map = np.max(h_map, axis=2)
+
+                # Ensure float32 or uint8
+                if h_map.dtype != np.float32 and h_map.dtype != np.uint8:
+                     h_map = h_map.astype(np.float32)
+
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(h_map)
+                
+                # Convert original image to BGR for drawing if not already
+                # Actually image here is usually RGB from QImage conversion logic? 
+                # Let's assume it's an numpy array, likely RGB or BGR.
+                # If it comes from 'image' key in results_data, it's the cropped numpy array (BGR usually)
+                display_img = image.copy()
+                
+                # If heatmap is smaller/larger, we might need to scale coordinates?
+                # Usually both are 448x448.
+                
+                # Draw Circle
+                cv2.circle(display_img, max_loc, 40, (0, 0, 255), 3) # Red Circle, Radius 40
+                
+                # Optional: Crosshair
+                # cv2.drawMarker(display_img, max_loc, (0, 0, 255), markerType=cv2.MARKER_CROSS, thickness=2)
+                
+            except Exception as e:
+                print(f"Error drawing defect circle: {e}")
+
         dlg = CanDetailDialog(
             can_id=item['can_id'],
             score=score,
             status=status,
-            image=item.get('image'),
+            image=display_img,
             heatmap=item.get('heatmap'),
             threshold=threshold,
             parent=self
@@ -2361,6 +2465,10 @@ Yield (Aprov.%): {(self.ok_count/self.total_count*100) if self.total_count > 0 e
                 
         except Exception as e:
             print(f"Failed to load OP state: {e}")
+
+    def handle_plc_trigger(self):
+        """Thread-safe PLC trigger handler"""
+        self.sig_plc_trigger.emit()
 
     def open_io_dialog(self):
         dlg = IODialog(self.plc, self)
