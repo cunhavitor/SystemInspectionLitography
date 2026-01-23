@@ -1,0 +1,18 @@
+
+========================================
+RELATÓRIO DE PRODUÇÃO - bpo_rr125
+========================================
+OP: 1144
+Data Início: 2026-01-22 15:46:48
+Data Fim:    2026-01-22 15:48:19
+
+Estatísticas Finais:
+-------------------
+Total Produzido: 48
+Aprovadas (OK):  42
+Reprovadas (NG): 6
+  - Defeitos:    6
+  - Qualidade:   0
+  
+Yield (Aprov.%): 87.50%
+========================================

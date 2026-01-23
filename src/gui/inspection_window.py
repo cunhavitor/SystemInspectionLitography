@@ -2,6 +2,8 @@ import matplotlib
 matplotlib.use('QtAgg')
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import json
+import os
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QLabel, QPushButton, QStatusBar, QFrame, QGroupBox,
                                QListWidget, QListWidgetItem, QDoubleSpinBox, QSplitter, 
@@ -23,7 +25,9 @@ from ..can_process_img.nomrmalize_can import prepare_for_autoencoder
 import cv2
 import numpy as np
 from datetime import datetime
+from datetime import datetime
 import os
+from ..plc_control import PLCManager
 
 class InspectionWorker(QThread):
     finished = Signal(object, dict, list, list, object) # qt_image, stats, logs, results_data, clean_image
@@ -419,6 +423,270 @@ class DefectsGalleryDialog(QDialog):
                  self.show_image(file_path)
         super().resizeEvent(event)
 
+class NewOPDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Nova Ordem de Produção (OP)")
+        self.setMinimumWidth(400)
+        self.setStyleSheet("background-color: #0D1117; color: #E6EDF3;")
+        
+        layout = QVBoxLayout(self)
+        
+        # Form Layout
+        from PySide6.QtWidgets import QFormLayout, QLineEdit, QComboBox, QSpinBox
+        form_layout = QFormLayout()
+        
+        # 1. SKU / Modelo
+        self.combo_sku = QComboBox()
+        self.combo_sku.setStyleSheet("background-color: #21262D; border: 1px solid #30363D; padding: 5px; color: white;")
+        self.combo_sku.addItem("bpo_rr125") # Currently the only supported model
+        # Add more items here if needed in future
+        form_layout.addRow("SKU / Modelo:", self.combo_sku)
+        
+        # 2. Ordem de Produção
+        self.txt_op = QLineEdit()
+        self.txt_op.setPlaceholderText("Ex: OP-2024-001")
+        self.txt_op.setStyleSheet("background-color: #010409; border: 1px solid #30363D; padding: 5px; color: white;")
+        form_layout.addRow("Ordem Produção:", self.txt_op)
+        
+        # 3. Quantidade
+        self.spin_qty = QSpinBox()
+        self.spin_qty.setRange(1, 999999)
+        self.spin_qty.setValue(1000)
+        self.spin_qty.setStyleSheet("background-color: #010409; border: 1px solid #30363D; padding: 5px; color: white;")
+        form_layout.addRow("Quantidade Prevista:", self.spin_qty)
+        
+        layout.addLayout(form_layout)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.setStyleSheet("background-color: #DA3633; color: white; border: none; padding: 8px; border-radius: 4px;")
+        btn_cancel.clicked.connect(self.reject)
+        
+        btn_confirm = QPushButton("Criar OP")
+        btn_confirm.setStyleSheet("background-color: #238636; color: white; border: none; padding: 8px; border-radius: 4px; font-weight: bold;")
+        btn_confirm.clicked.connect(self.accept)
+        
+        btn_layout.addWidget(btn_cancel)
+        btn_layout.addWidget(btn_confirm)
+        layout.addLayout(btn_layout)
+        
+    def get_data(self):
+        return {
+            "sku": self.combo_sku.currentText(),
+            "op": self.txt_op.text().strip(),
+            "qty": self.spin_qty.value()
+        }
+
+class ReportsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Relatórios de Produção")
+        self.resize(800, 600)
+        self.setStyleSheet("background-color: #0D1117; color: #E6EDF3;")
+        
+        layout = QHBoxLayout(self)
+        
+        # Left: File List
+        list_layout = QVBoxLayout()
+        lbl_files = QLabel("Arquivos Disponíveis")
+        lbl_files.setStyleSheet("font-weight: bold; color: #58A6FF;")
+        list_layout.addWidget(lbl_files)
+        
+        self.file_list = QListWidget()
+        self.file_list.setStyleSheet("""
+            QListWidget {
+                background-color: #161B22;
+                border: 1px solid #30363D;
+                border-radius: 6px;
+                padding: 5px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #21262D;
+            }
+            QListWidget::item:selected {
+                background-color: #1F6FEB;
+                color: white;
+            }
+        """)
+        self.file_list.itemClicked.connect(self.load_report_content)
+        list_layout.addWidget(self.file_list)
+        
+        # Refresh Button
+        btn_refresh = QPushButton("Atualizar Lista")
+        btn_refresh.setStyleSheet("background-color: #238636; color: white; padding: 6px; border-radius: 4px;")
+        btn_refresh.clicked.connect(self.load_file_list)
+        list_layout.addWidget(btn_refresh)
+        
+        layout.addLayout(list_layout, 1)
+        
+        # Right: Content Viewer
+        content_layout = QVBoxLayout()
+        lbl_content = QLabel("Conteúdo do Relatório")
+        lbl_content.setStyleSheet("font-weight: bold; color: #58A6FF;")
+        content_layout.addWidget(lbl_content)
+        
+        from PySide6.QtWidgets import QTextEdit
+        self.text_viewer = QTextEdit()
+        self.text_viewer.setReadOnly(True)
+        self.text_viewer.setStyleSheet("""
+            QTextEdit {
+                background-color: #0D1117;
+                border: 1px solid #30363D;
+                border-radius: 6px;
+                padding: 10px;
+                font-family: monospace;
+                font-size: 13px;
+                color: #C9D1D9;
+            }
+        """)
+        content_layout.addWidget(self.text_viewer)
+        
+        # Button Layout (Close + Print)
+        btn_layout = QHBoxLayout()
+        
+        # Print Button
+        btn_print = QPushButton("Imprimir")
+        btn_print.setStyleSheet("background-color: #1F6FEB; color: white; padding: 8px; border-radius: 4px; font-weight: bold;")
+        btn_print.clicked.connect(self.print_report)
+        btn_layout.addWidget(btn_print)
+        
+        btn_layout.addStretch()
+        
+        # Close Button
+        btn_close = QPushButton("Fechar")
+        btn_close.setStyleSheet("background-color: #30363D; color: white; padding: 8px; border-radius: 4px;")
+        btn_close.clicked.connect(self.accept)
+        btn_layout.addWidget(btn_close)
+        
+        content_layout.addLayout(btn_layout)
+        
+        layout.addLayout(content_layout, 2)
+        
+        # Initial Load
+        self.load_file_list()
+        
+    def load_file_list(self):
+        self.file_list.clear()
+        reports_dir = "reports"
+        if not os.path.exists(reports_dir):
+            os.makedirs(reports_dir)
+            
+        files = [f for f in os.listdir(reports_dir) if f.endswith(".txt")]
+        # Sort by newest first (assuming naming convention has date, otherwise sort by mtime)
+        files.sort(reverse=True) 
+        
+        for f in files:
+            self.file_list.addItem(f)
+            
+    def load_report_content(self, item):
+        filename = item.text()
+        path = os.path.join("reports", filename)
+        try:
+            with open(path, "r") as f:
+                content = f.read()
+            self.text_viewer.setText(content)
+        except Exception as e:
+            self.text_viewer.setText(f"Erro ao ler arquivo: {e}")
+
+    def print_report(self):
+        """Print the currently displayed report"""
+        from PySide6.QtPrintSupport import QPrinter, QPrintDialog
+        
+        printer = QPrinter(QPrinter.ScreenResolution)
+        dialog = QPrintDialog(printer, self)
+        
+        if dialog.exec() == QPrintDialog.Accepted:
+            self.text_viewer.print_(printer)
+        lbl_files.setStyleSheet("font-weight: bold; color: #58A6FF;")
+        list_layout.addWidget(lbl_files)
+        
+        self.file_list = QListWidget()
+        self.file_list.setStyleSheet("""
+            QListWidget {
+                background-color: #161B22;
+                border: 1px solid #30363D;
+                border-radius: 6px;
+                padding: 5px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #21262D;
+            }
+            QListWidget::item:selected {
+                background-color: #1F6FEB;
+                color: white;
+            }
+        """)
+        self.file_list.itemClicked.connect(self.load_report_content)
+        list_layout.addWidget(self.file_list)
+        
+        # Refresh Button
+        btn_refresh = QPushButton("Atualizar Lista")
+        btn_refresh.setStyleSheet("background-color: #238636; color: white; padding: 6px; border-radius: 4px;")
+        btn_refresh.clicked.connect(self.load_file_list)
+        list_layout.addWidget(btn_refresh)
+        
+        layout.addLayout(list_layout, 1)
+        
+        # Right: Content Viewer
+        content_layout = QVBoxLayout()
+        lbl_content = QLabel("Conteúdo do Relatório")
+        lbl_content.setStyleSheet("font-weight: bold; color: #58A6FF;")
+        content_layout.addWidget(lbl_content)
+        
+        from PySide6.QtWidgets import QTextEdit
+        self.text_viewer = QTextEdit()
+        self.text_viewer.setReadOnly(True)
+        self.text_viewer.setStyleSheet("""
+            QTextEdit {
+                background-color: #0D1117;
+                border: 1px solid #30363D;
+                border-radius: 6px;
+                padding: 10px;
+                font-family: monospace;
+                font-size: 13px;
+                color: #C9D1D9;
+            }
+        """)
+        content_layout.addWidget(self.text_viewer)
+        
+        # Close Button
+        btn_close = QPushButton("Fechar")
+        btn_close.setStyleSheet("background-color: #30363D; color: white; padding: 8px; border-radius: 4px;")
+        btn_close.clicked.connect(self.accept)
+        content_layout.addWidget(btn_close)
+        
+        layout.addLayout(content_layout, 2)
+        
+        # Initial Load
+        self.load_file_list()
+        
+    def load_file_list(self):
+        self.file_list.clear()
+        reports_dir = "reports"
+        if not os.path.exists(reports_dir):
+            os.makedirs(reports_dir)
+            
+        files = [f for f in os.listdir(reports_dir) if f.endswith(".txt")]
+        # Sort by newest first (assuming naming convention has date, otherwise sort by mtime)
+        files.sort(reverse=True) 
+        
+        for f in files:
+            self.file_list.addItem(f)
+            
+    def load_report_content(self, item):
+        filename = item.text()
+        path = os.path.join("reports", filename)
+        try:
+            with open(path, "r") as f:
+                content = f.read()
+            self.text_viewer.setText(content)
+        except Exception as e:
+            self.text_viewer.setText(f"Erro ao ler arquivo: {e}")
+
 class CanDetailDialog(QDialog):
     def __init__(self, can_id, score, status, image, heatmap, threshold, parent=None):
         super().__init__(parent)
@@ -518,6 +786,12 @@ class InspectionWindow(QMainWindow):
         self.config = config
         self.user_manager = user_manager
         self.dashboard = dashboard
+        
+        # Determine User Role
+        # Assuming user_manager has logged_in_user content or we get it from dashboard
+        self.current_user = self.user_manager.current_user
+        self.user_role = self.current_user.role if self.current_user else 'operador'
+        
         self.camera = None
         self.camera_thread = None
         
@@ -531,6 +805,15 @@ class InspectionWindow(QMainWindow):
         self.last_clean_image = None # For live threshold updates
         self.last_results_data = []  # For live threshold updates
         self.is_running = False # Start/Stop state
+        self.current_job = None # Stores current job info {sku, op, qty}
+        
+        # Session Counters (Reset on every Start)
+        self.session_counts = {
+            'total': 0, 'ok': 0, 'ng': 0, 'defect': 0, 'quality': 0
+        }
+        
+        # PLC Control
+        self.plc = PLCManager()
         
         # Inspection Trigger Logic
         self.pending_inspection = False
@@ -583,9 +866,28 @@ class InspectionWindow(QMainWindow):
         self.resize(1280, 720)
         
         self._setup_ui()
-        # Delay camera start to allow UI to show (and status bar to be visible during warmup)
+        # Delay camera start to allow UI to show 
         QTimer.singleShot(500, self._start_camera)
-        self.showMaximized()
+
+        # Status Bar Custom Setup
+        self.lbl_status_msg = QLabel("Pronto")
+        self.lbl_status_msg.setStyleSheet("color: #E6EDF3; padding-left: 10px;")
+        
+        self.lbl_current_op = QLabel("SEM OP")
+        self.lbl_current_op.setAlignment(Qt.AlignCenter)
+        self.lbl_current_op.setStyleSheet("color: #6E7681; font-weight: bold; font-size: 14px;")
+        
+        self.lbl_status_right_spacer = QLabel("") 
+        
+        self.statusBar().addWidget(self.lbl_status_msg, 1) 
+        self.statusBar().addWidget(self.lbl_current_op, 0) 
+        self.statusBar().addWidget(self.lbl_status_right_spacer, 1) 
+        
+        # Compatibility ref
+        self.status_bar = self.statusBar()
+
+        # Load saved state if available
+        self.load_op_state()
         
     def _setup_ui(self):
         central_widget = QWidget()
@@ -606,7 +908,8 @@ class InspectionWindow(QMainWindow):
             QGroupBox {
                 background-color: #1A2129;
                 border: 1px solid #2E3A46;
-                border-top: 1px solid #3E4C59; /* Highlight discreto no topo */
+                border-top: 1px solid #3E4C59;
+
                 border-radius: 8px;
                 margin-top: 24px; /* Space for title */
                 font-weight: bold;
@@ -693,6 +996,26 @@ class InspectionWindow(QMainWindow):
         self.lbl_time = QLabel()
         self.lbl_time.setStyleSheet("font-size: 14px; color: #8B949E; font-family: monospace;")
         header.addWidget(self.lbl_time)
+        
+        # Reports Button (Restricted)
+        if self.user_role in ['admin', 'master', 'tecnico']:
+            btn_reports = QPushButton("Relatórios")
+            btn_reports.setCursor(Qt.PointingHandCursor)
+            btn_reports.setStyleSheet("""
+                QPushButton {
+                    background-color: #238636;
+                    color: white;
+                    border: 1px solid #2EA043;
+                    border-radius: 4px;
+                    padding: 5px 10px;
+                    font-weight: bold;
+                    margin-left: 10px;
+                }
+                QPushButton:hover { background-color: #2EA043; }
+            """)
+            btn_reports.clicked.connect(self.open_reports_dialog)
+            header.addWidget(btn_reports)
+
         main_layout.addLayout(header)
         
         # Timer for clock
@@ -716,6 +1039,23 @@ class InspectionWindow(QMainWindow):
         # 1. Start/Stop Controls
         controls_layout = QHBoxLayout()
         
+        self.btn_new_op = QPushButton("NOVA OP")
+        self.btn_new_op.setCursor(Qt.PointingHandCursor)
+        self.btn_new_op.setStyleSheet("""
+            QPushButton {
+                background-color: #1F6FEB;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px;
+                border: 1px solid #1F6FEB;
+                border-radius: 6px;
+            }
+            QPushButton:hover { background-color: #388BFD; }
+            QPushButton:disabled { background-color: #1F2428; color: #484F58; border: 1px solid #30363D; }
+        """)
+        self.btn_new_op.clicked.connect(self.on_new_op)
+        
         self.btn_start = QPushButton("INICIAR")
         self.btn_start.setCursor(Qt.PointingHandCursor)
         self.btn_start.setStyleSheet("""
@@ -732,6 +1072,19 @@ class InspectionWindow(QMainWindow):
             QPushButton:disabled { background-color: #1F2428; color: #484F58; border: 1px solid #30363D; }
         """)
         self.btn_start.clicked.connect(self.start_inspection_mode)
+        self.btn_start.setEnabled(False) # Require job first? Or optional? User didn't specify strict requirement but said "add a button... that opens dialog... this button is only enable when is in stop mode".
+        # I'll keep Start enabled by default but if they use New Job it sets context. 
+        # Wait, if they WANT to enforce job, I should maybe disable Start. 
+        # User said "this button [New Job] is only enable when is in stop mode". 
+        # I will leave Start enabled but maybe warn if no job? 
+        # Or better: Disable Start until New Job is clicked if we want to force it. 
+        # For now, I'll allow Start primarily, but New Job is the preferred flow.
+        # Actually user flow suggests: "add new job... after that create a log".
+        # I will keep Start ENABLED for backward compatibility unless specified, 
+        # but the New Job button is prominent.
+        
+        # controls_layout.addWidget(self.btn_new_job)
+        # controls_layout.addWidget(self.btn_start)
         
         self.btn_stop = QPushButton("PARAR")
         self.btn_stop.setCursor(Qt.PointingHandCursor)
@@ -751,21 +1104,47 @@ class InspectionWindow(QMainWindow):
         self.btn_stop.clicked.connect(self.stop_inspection_mode)
         self.btn_stop.setEnabled(False)
         
-        controls_layout.addWidget(self.btn_start)
-        controls_layout.addWidget(self.btn_stop)
-        left_layout.addLayout(controls_layout)
+        self.btn_finish_op = QPushButton("TERMINAR OP")
+        self.btn_finish_op.setCursor(Qt.PointingHandCursor)
+        self.btn_finish_op.setStyleSheet("""
+            QPushButton {
+                background-color: #8B949E;
+                color: white;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 10px;
+                border: 1px solid #6E7681;
+                border-radius: 6px;
+            }
+            QPushButton:hover { background-color: #6E7681; }
+            QPushButton:disabled { background-color: #1F2428; color: #484F58; border: 1px solid #30363D; }
+        """)
+        self.btn_finish_op.clicked.connect(self.on_finish_op)
+        self.btn_finish_op.setEnabled(False)
         
-
+        # Grid Layout for Controls
+        controls_layout = QGridLayout()
+        controls_layout.addWidget(self.btn_new_op, 0, 0)
+        controls_layout.addWidget(self.btn_finish_op, 0, 1)
+        controls_layout.addWidget(self.btn_start, 1, 0)
+        controls_layout.addWidget(self.btn_stop, 1, 1)
         
-        # KPI Cards (Vertical Stack)
+        controls_widget = QWidget()
+        controls_widget.setLayout(controls_layout)
+        left_layout.addWidget(controls_widget)
+        
+        controls_widget.setLayout(controls_layout)
+        left_layout.addWidget(controls_widget)
+        
+        # KPI Group (Contadores OP) - Matches "Estatísticas Turno" style
+        kpi_group = QGroupBox("Contadores OP")
         kpi_layout = QVBoxLayout()
         kpi_layout.setSpacing(12)
+        
         # Using requested palette:
         self.kpi_total = self._create_kpi_card("TOTAL", "0", "#21262D") # Dark Neutral
         self.kpi_ok = self._create_kpi_card("OK", "0", "#1C3323")    # Dark Green Tint #2EA043 accent
-        # Just tint the background slightly, use border for accent
         
-        # Let's customize create_kpi_card instead to be smarter
         self.kpi_ng = self._create_kpi_card("NG", "0", "#3E2020")    # Dark Red Tint
         self.kpi_yield = self._create_kpi_card("Perc. OK", "0%", "#382810") # Dark Orange Tint
         
@@ -773,7 +1152,9 @@ class InspectionWindow(QMainWindow):
         kpi_layout.addWidget(self.kpi_ok)
         kpi_layout.addWidget(self.kpi_ng)
         kpi_layout.addWidget(self.kpi_yield)
-        left_layout.addLayout(kpi_layout)
+        
+        kpi_group.setLayout(kpi_layout)
+        left_layout.addWidget(kpi_group)
         
         # Donut Chart for Breakdown
         donut_group = QGroupBox("Distribuição")
@@ -867,7 +1248,7 @@ class InspectionWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         
         # 1. Statistics Group
-        stats_group = QGroupBox("Estatísticas")
+        stats_group = QGroupBox("Estatísticas Turno")
         stats_layout = QGridLayout()
         stats_layout.setVerticalSpacing(8)
         stats_layout.setColumnStretch(1, 1) # Values on right take remaining space
@@ -977,16 +1358,23 @@ class InspectionWindow(QMainWindow):
         # 4. Log Button
         self.btn_logs = QPushButton("📄 Ver Registos")
         self.btn_logs.setCursor(Qt.PointingHandCursor)
-        # Inherits global style, maybe add specific emphasis if needed
         self.btn_logs.setStyleSheet("border: 1px solid #30363D; color: #8B949E;") 
         self.btn_logs.clicked.connect(self.open_logs_dialog)
         right_layout.addWidget(self.btn_logs)
         
-        # Access Control: Hide Logs and Defects for Operators
+        # 5. IO Status Button
+        self.btn_io = QPushButton("🔌 Estado I/O")
+        self.btn_io.setCursor(Qt.PointingHandCursor)
+        self.btn_io.setStyleSheet("border: 1px solid #30363D; color: #8B949E;")
+        self.btn_io.clicked.connect(self.open_io_dialog)
+        right_layout.addWidget(self.btn_io)
+        
+        # Access Control: Hide Logs, Defects, IO for Operators
         # Only Master and Tecnico can see these sensitive debugging/historical tools
         if self.user_manager.current_user.role not in ['admin', 'tecnico']:
             self.btn_logs.hide()
             self.btn_defects.hide()
+            self.btn_io.hide()
 
         # Hidden Log List (Keep object alive for logic compatibility)
         self.log_list = QListWidget() 
@@ -1104,7 +1492,7 @@ class InspectionWindow(QMainWindow):
             self.camera.load_parameters()
             
             # Warmup to settle Auto-Exposure
-            self.status_bar.showMessage("A aquecer câmara...", 0)
+            self.update_status("A aquecer câmara...", 0)
             
             # Show Progress Bar
             self.warmup_progress.show()
@@ -1124,10 +1512,10 @@ class InspectionWindow(QMainWindow):
             self.camera_thread.start()
             
             self.warmup_progress.hide()
-            self.status_bar.showMessage("Câmara Pronta", 2000)
+            self.update_status("Câmara Pronta", 2000)
         except Exception as e:
             self.video_label.setText(f"Camera Error: {str(e)}")
-            self.status_bar.showMessage(f"Error: {str(e)}")
+            self.update_status(f"Error: {str(e)}")
 
     def update_frame(self, qt_image, sharpness, raw_frame):
         # Update internal frame for capture, but DO NOT update UI (Live View Disabled)
@@ -1148,16 +1536,122 @@ class InspectionWindow(QMainWindow):
 
 
 
+    def on_new_op(self):
+        """Open New OP Dialog and configure context"""
+        dlg = NewOPDialog(self)
+        if dlg.exec():
+            data = dlg.get_data()
+            
+            # Capture Start Time for Report
+            data['start_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.current_job = data
+            
+            # Log Job Start
+            timestamp = data['start_time']
+            log_msg = (f"OP STARTED | SKU: {data['sku']} | "
+                       f"OP: {data['op']} | Qty: {data['qty']}")
+            
+            print(f"[{timestamp}] {log_msg}")
+            
+            # Persist to file (Log)
+            try:
+                if not os.path.exists("logs"):
+                    os.makedirs("logs")
+                with open("logs/jobs.log", "a") as f:
+                    f.write(f"[{timestamp}] {log_msg}\n")
+            except Exception as e:
+                print(f"Failed to write to job log: {e}")
+                
+            # Persist State (Resume capability)
+            self.save_op_state()
+            
+            # Reset ALL Counters for new OP
+            self.total_count = 0
+            self.ok_count = 0
+            self.ng_count = 0
+            self.defect_count = 0
+            self.quality_count = 0
+            
+            self.session_counts = {
+                'total': 0, 'ok': 0, 'ng': 0, 'defect': 0, 'quality': 0
+            }
+            self.update_kpis()
+            self.update_donut()
+            
+            # Update Status Bar & Footer
+            self.update_status(f"OP Iniciada: {data['op']}")
+            if hasattr(self, 'lbl_current_op'):
+                self.lbl_current_op.setText(f"OP EM CURSO: {data['op']} ({data['sku']})")
+            
+            # Update Stats Panel Start Time
+            if hasattr(self, 'lbl_stats_start'):
+                # Format to HH:MM if preferred, or maintain full date
+                # data['start_time'] is YYYY-MM-DD HH:MM:SS
+                try:
+                    dt = datetime.strptime(data['start_time'], "%Y-%m-%d %H:%M:%S")
+                    self.lbl_stats_start.setText(dt.strftime('%d/%m/%Y %H:%M'))
+                except:
+                    self.lbl_stats_start.setText(data['start_time'])
+            if hasattr(self, 'lbl_stats_end'):
+                self.lbl_stats_end.setText("--/-- --:--")
+            
+            # Enable Buttons
+            self.btn_new_op.setEnabled(False) # Block new OP creation while active
+            self.btn_start.setEnabled(True)
+            self.btn_finish_op.setEnabled(True)
+            
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "OP Criada", 
+                                  f"Ordem de Produção configurada com sucesso!\n\n{log_msg}")
+
     def start_inspection_mode(self):
+        if self.is_running:
+            return
+            
+        if not self.current_job:
+            # Fallback
+            self.current_job = {"sku": "bpo_rr125", "op": "DEFAULT", "qty": 0}
+            print("Warning: Starting without explicit job. Using default.")
+            
+        # Reset Session Counters
+        self.session_counts = {
+            'total': 0, 'ok': 0, 'ng': 0, 'defect': 0, 'quality': 0
+        }
+        self.update_kpis() # Refresh display immediately
+
         self.is_running = True
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
-        self.status_bar.showMessage("SISTEMA EM EXECUÇÃO - Pressione 'T' para Inspecionar", 0)
+        self.btn_new_op.setEnabled(False)
+        
+        self.update_status(f"SISTEMA EM EXECUÇÃO ({self.current_job['op']}) - Pressione 'T' para Inspecionar", 0)
         
         # Set Start Timestamp
-        now = datetime.now()
-        self.lbl_stats_start.setText(now.strftime('%d/%m/%Y %H:%M'))
-        self.lbl_stats_end.setText("--/-- --:--")
+        # Use OP start time if available, otherwise now AND SAVE IT
+        if self.current_job and 'start_time' in self.current_job:
+            start_str = self.current_job['start_time']
+            try:
+                dt = datetime.strptime(start_str, "%Y-%m-%d %H:%M:%S")
+                disp_str = dt.strftime('%d/%m/%Y %H:%M')
+            except:
+                disp_str = start_str
+        else:
+            now = datetime.now()
+            # SAVE the start time so it persists for this "Default" job
+            if not self.current_job:
+                 self.current_job = {"sku": "bpo_rr125", "op": "DEFAULT", "qty": 0}
+            
+            self.current_job['start_time'] = now.strftime("%Y-%m-%d %H:%M:%S")
+            disp_str = now.strftime('%d/%m/%Y %H:%M')
+            
+        if hasattr(self, 'lbl_stats_start'):
+             print(f"DEBUG: Setting Start Time to {disp_str}")
+             self.lbl_stats_start.setText(disp_str)
+             # Always reset end time when starting/resuming
+             if hasattr(self, 'lbl_stats_end'):
+                 self.lbl_stats_end.setText("--/-- --:--")
+        else:
+             print("DEBUG: lbl_stats_start NOT FOUND")
         
         # Force focus back to main window so KeyPressEvent works immediately
         self.setFocus()
@@ -1166,11 +1660,18 @@ class InspectionWindow(QMainWindow):
         self.is_running = False
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        self.status_bar.showMessage("SISTEMA PARADO", 0)
+        # self.btn_new_op.setEnabled(True) # Only enable on Finish OP
         
-        # Set Stop Timestamp
+        self.update_status("SISTEMA EM PAUSA", 0)
+        
+        # Set Stop Timestamp (Pause Time)
         now = datetime.now()
-        self.lbl_stats_end.setText(now.strftime('%d/%m/%Y %H:%M'))
+        if hasattr(self, 'lbl_stats_end'):
+            stop_str = now.strftime('%d/%m/%Y %H:%M')
+            print(f"DEBUG: Setting Stop Time to {stop_str}")
+            self.lbl_stats_end.setText(stop_str)
+        else:
+            print("DEBUG: lbl_stats_end NOT FOUND")
 
     def keyPressEvent(self, event):
         # Trigger inspection with 'T' key only if running
@@ -1178,7 +1679,7 @@ class InspectionWindow(QMainWindow):
             if self.is_running:
                 self.trigger_inspection()
             else:
-                self.status_bar.showMessage("AVISO: Sistema PARADO. Pressione INICIAR primeiro.", 2000)
+                self.update_status("AVISO: Sistema PARADO. Pressione INICIAR primeiro.", 2000)
         else:
             super().keyPressEvent(event)
 
@@ -1187,13 +1688,13 @@ class InspectionWindow(QMainWindow):
         Capture current frame and trigger inspection for ALL cans.
         """
         if not self.is_running:
-            self.status_bar.showMessage("Ignorado: Sistema PARADO.", 1000)
+            self.update_status("Ignorado: Sistema PARADO.", 1000)
             return
 
         if self.camera_thread and self.camera_thread.running:
             # Check if inferencer is loaded
             if self.inferencer is None:
-                self.status_bar.showMessage("ERROR: PatchCore model not loaded! Cannot inspect.", 5000)
+                self.update_status("ERROR: PatchCore model not loaded! Cannot inspect.", 5000)
                 return
                 
             # Briefly unpause to get fresh frame (camera keeps updating current_frame in background)
@@ -1205,12 +1706,12 @@ class InspectionWindow(QMainWindow):
             
             # Start safety timeout (2 seconds)
             self.inspection_timeout_timer.start(2000) 
-            self.status_bar.showMessage("A aguardar frame...", 2000)
+            self.update_status("A aguardar frame...", 2000)
             
     def on_inspection_timeout(self):
         """Called if no frame arrives within timeout period"""
         self.pending_inspection = False
-        self.status_bar.showMessage("Erro: Timeout ao aguardar frame da câmara.", 4000)
+        self.update_status("Erro: Timeout ao aguardar frame da câmara.", 4000)
         # Ensure we don't leave camera running if we wanted to stop it? 
         # Actually logic is we want it running to get a frame. 
         # But if it failed, maybe we should repause if that was the intent, 
@@ -1219,7 +1720,7 @@ class InspectionWindow(QMainWindow):
     def _start_inspection(self):
         """Helper to start inspection with captured frame"""
         if self.current_frame is None:
-            self.status_bar.showMessage("Sem sinal de câmara!", 2000)
+            self.update_status("Sem sinal de câmara!", 2000)
             return
         
         # Capture the current frame for inspection
@@ -1229,7 +1730,7 @@ class InspectionWindow(QMainWindow):
         self.camera_thread.paused = True
 
         # Start Worker with captured frame
-        self.status_bar.showMessage("A Inspecionar...", 1000)
+        self.update_status("A Inspecionar...", 1000)
         
         self.worker = InspectionWorker(
             inspection_frame, 
@@ -1241,7 +1742,7 @@ class InspectionWindow(QMainWindow):
             self.resizer,  # NEW
             prepare_for_autoencoder  # NEW: pass function directly
         )
-        self.worker.progress.connect(lambda msg: self.status_bar.showMessage(msg))
+        self.worker.progress.connect(lambda msg: self.update_status(msg))
         self.worker.error.connect(self.on_inspection_error)
         self.worker.finished.connect(self.on_inspection_finished)
         self.worker.progressive_update.connect(self.on_progressive_update)  # NEW
@@ -1250,17 +1751,17 @@ class InspectionWindow(QMainWindow):
     def on_progressive_update(self, qt_image, current, total, scores):
         """Update display progressively as cans are inspected"""
         self.update_image_display(qt_image)
-        self.status_bar.showMessage(f"A Inspecionar... {current}/{total} latas", 500)
+        self.update_status(f"A Inspecionar... {current}/{total} latas", 500)
         self.update_graph(scores, self.threshold_spinbox.value())
 
     def on_inspection_error(self, msg):
-        self.status_bar.showMessage(f"Error: {msg}", 4000)
+        self.update_status(f"Error: {msg}", 4000)
         # Unpause on error so user can try again
         if self.camera_thread:
             self.camera_thread.paused = False
 
     def on_inspection_finished(self, qt_image, stats, logs, results_data, clean_image):
-        self.status_bar.showMessage("Inspeção Concluída", 2000)
+        self.update_status("Inspeção Concluída", 2000)
         
         # Store data for live visual updates
         self.last_clean_image = clean_image
@@ -1281,6 +1782,13 @@ class InspectionWindow(QMainWindow):
         self.ng_count += ng_batch
         self.defect_count += defect_batch
         self.quality_count += quality_batch
+        
+        # Update Session Counters
+        self.session_counts['total'] += total_batch
+        self.session_counts['ok'] += ok_batch
+        self.session_counts['ng'] += ng_batch
+        self.session_counts['defect'] += defect_batch
+        self.session_counts['quality'] += quality_batch
         
         self.update_kpis()
         self.update_donut()
@@ -1331,7 +1839,7 @@ class InspectionWindow(QMainWindow):
         
         # 4. Freeze display - do NOT auto-resume camera
         # User wants to keep inspection result on screen
-        self.status_bar.showMessage(f"Inspection Complete. {timing_msg}", 3000)
+        self.update_status(f"Inspection Complete. {timing_msg}", 3000)
 
     def refresh_visuals(self, threshold):
         """Redraw bounding boxes and update graph based on new threshold"""
@@ -1394,13 +1902,29 @@ class InspectionWindow(QMainWindow):
         self.video_label.setPixmap(scaled_pixmap)
 
     def update_kpis(self):
-        """Update KPI cards"""
+        """Update KPI cards (Global) and Stats Panel (Session)"""
+        
+        # 1. Left Panel (Global OP Stats)
         yield_pct = (self.ok_count / self.total_count * 100) if self.total_count > 0 else 0
         
         self.update_kpi(self.kpi_total, self.total_count)
         self.update_kpi(self.kpi_ok, self.ok_count)
         self.update_kpi(self.kpi_ng, self.ng_count)
         self.update_kpi(self.kpi_yield, f"{yield_pct:.1f}%")
+        
+        # 2. Right Panel (Session Stats)
+        s_total = self.session_counts['total']
+        s_ok = self.session_counts['ok']
+        s_ng = self.session_counts['ng']
+        
+        s_good_pct = (s_ok / s_total * 100) if s_total > 0 else 0
+        s_bad_pct = (s_ng / s_total * 100) if s_total > 0 else 0
+        
+        self.lbl_stats_total.setText(str(s_total))
+        # Start/End times are handled in start/stop methods
+        # avg time? Need to track session duration or something? For now leave as is or use global
+        self.lbl_stats_good_pct.setText(f"{s_good_pct:.1f}%")
+        self.lbl_stats_bad_pct.setText(f"{s_bad_pct:.1f}%")
 
     def add_log_entry(self, can_id, score, is_normal, is_summary=False, message=None):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1471,6 +1995,11 @@ class InspectionWindow(QMainWindow):
     def open_logs_dialog(self):
         """Open the logs dialog"""
         dlg = LogsDialog(self.log_list, self)
+        dlg.exec()
+
+    def open_reports_dialog(self):
+        """Open the production reports viewer"""
+        dlg = ReportsDialog(self)
         dlg.exec()
 
     def update_donut(self):
@@ -1646,6 +2175,101 @@ class InspectionWindow(QMainWindow):
         )
         dlg.exec()
         
+    def on_finish_op(self):
+        """Finish current OP, generate report and clear state"""
+        if not self.current_job:
+            return
+            
+        # Confirm
+        from PySide6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(self, 'Confirmar Término', 
+                                   f"Deseja realmente terminar a OP {self.current_job['op']}?\nA inspeção será parada.",
+                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                                   
+        if reply == QMessageBox.No:
+            return
+            
+        # Stop everything
+        if self.is_running:
+            self.stop_inspection_mode()
+            
+        # Generate Stats
+        end_time = datetime.now()
+        start_time_str = self.current_job.get("start_time", "N/A")
+        
+
+        # Get username
+        username = self.current_user.username if self.current_user else "N/A"
+
+        report_text = f"""
+========================================
+RELATÓRIO DE PRODUÇÃO - {self.current_job['sku']}
+========================================
+OP: {self.current_job['op']}
+Usuario: {username}
+Data Início: {start_time_str}
+Data Fim:    {end_time.strftime('%Y-%m-%d %H:%M:%S')}
+
+Estatísticas Finais:
+-------------------
+Total Produzido: {self.total_count}
+Aprovadas (OK):  {self.ok_count}
+Reprovadas (NG): {self.ng_count}
+  - Defeitos:    {self.defect_count}
+  - Qualidade:   {self.quality_count}
+  
+Yield (Aprov.%): {(self.ok_count/self.total_count*100) if self.total_count > 0 else 0:.2f}%
+========================================
+"""
+        # Save Report
+        try:
+            if not os.path.exists("reports"):
+                os.makedirs("reports")
+            report_name = f"reports/Report_{self.current_job['op']}_{end_time.strftime('%Y%m%d_%H%M%S')}.txt"
+            with open(report_name, "w") as f:
+                f.write(report_text)
+            print(f"Report saved to {report_name}")
+            
+            # Delete State File regarding this OP
+            if os.path.exists("data/current_op.json"):
+                os.remove("data/current_op.json")
+                print("OP State file removed.")
+                
+        except Exception as e:
+            print(f"Failed to save report or clear state: {e}")
+            
+        # Show Summary
+        QMessageBox.information(self, "OP Finalizada", report_text)
+        
+        # Reset State
+        self.current_job = None
+        self.lbl_current_op.setText("SEM OP ATIVA")
+        
+        # Reset Buttons
+        self.btn_new_op.setEnabled(True)
+        self.btn_start.setEnabled(False)
+        self.btn_finish_op.setEnabled(False)
+        self.btn_stop.setEnabled(False)
+        
+        # Reset Counters (Optional, user might expect clean slate for next OP)
+        self.total_count = 0
+        self.ok_count = 0
+        self.ng_count = 0
+        self.defect_count = 0
+        self.quality_count = 0
+        self.update_kpis()
+        self.update_donut()
+
+    def update_status(self, message, timeout=0):
+        """Custom status update to preserve centered OP label"""
+        if hasattr(self, 'lbl_status_msg'):
+            self.lbl_status_msg.setText(message)
+            if timeout > 0:
+                QTimer.singleShot(timeout, lambda: self.lbl_status_msg.setText("Pronto"))
+        else:
+            # Fallback if init failed
+            self.statusBar().showMessage(message, timeout)
+
     def closeEvent(self, event):
         from PySide6.QtWidgets import QMessageBox
         if self.is_running:
@@ -1657,6 +2281,9 @@ class InspectionWindow(QMainWindow):
                 event.ignore()
                 return
 
+        # Save state before closing
+        self.save_op_state()
+        
         # Explicitly stop resources if closing
         self.timer.stop()
         if self.camera_thread:
@@ -1669,3 +2296,169 @@ class InspectionWindow(QMainWindow):
             self.parent().show()
             
         event.accept()
+    def save_op_state(self):
+        """Save current OP state to JSON for persistence"""
+        if not self.current_job:
+            return
+
+        state = {
+            "job": self.current_job,
+            "stats": {
+                "total": self.total_count,
+                "ok": self.ok_count,
+                "ng": self.ng_count,
+                "defect": self.defect_count,
+                "quality": self.quality_count
+            }
+        }
+        
+        try:
+            if not os.path.exists("data"):
+                os.makedirs("data")
+            with open("data/current_op.json", "w") as f:
+                json.dump(state, f)
+            print("OP State saved.")
+        except Exception as e:
+            print(f"Failed to save OP state: {e}")
+
+    def load_op_state(self):
+        """Load OP state from JSON if exists"""
+        if not os.path.exists("data/current_op.json"):
+            return
+
+        try:
+            with open("data/current_op.json", "r") as f:
+                state = json.load(f)
+            
+            self.current_job = state.get("job")
+            stats = state.get("stats", {})
+            
+            self.total_count = stats.get("total", 0)
+            self.ok_count = stats.get("ok", 0)
+            self.ng_count = stats.get("ng", 0)
+            self.defect_count = stats.get("defect", 0)
+            self.quality_count = stats.get("quality", 0)
+            
+            # Restore UI Context
+            if self.current_job:
+                op_id = self.current_job.get("op", "UNKNOWN")
+                sku = self.current_job.get("sku", "UNKNOWN")
+                
+                # Update Status Bar
+                if hasattr(self, 'lbl_current_op'):
+                   self.lbl_current_op.setText(f"OP EM CURSO: {op_id} ({sku})")
+                
+                # Enable Buttons
+                self.btn_new_op.setEnabled(False)
+                self.btn_start.setEnabled(True)
+                self.btn_finish_op.setEnabled(True)
+                
+                # Update KPIs
+                self.update_kpis()
+                self.update_donut()
+                
+                print(f"OP State loaded: {op_id}")
+                
+        except Exception as e:
+            print(f"Failed to load OP state: {e}")
+
+    def open_io_dialog(self):
+        dlg = IODialog(self.plc, self)
+        dlg.exec()
+
+class IODialog(QDialog):
+    def __init__(self, plc_manager, parent=None):
+        super().__init__(parent)
+        self.plc = plc_manager
+        self.setWindowTitle("Diagnóstico I/O (Raspberry Pi)")
+        self.resize(500, 400)
+        self.setStyleSheet("background-color: #0D1117; color: #E6EDF3;")
+        
+        layout = QVBoxLayout(self)
+        
+        # Header
+        lbl_info = QLabel("Estado das Entradas e Saídas Digitais")
+        lbl_info.setStyleSheet("font-size: 16px; font-weight: bold; color: #58A6FF; margin-bottom: 10px;")
+        lbl_info.setAlignment(Qt.AlignCenter)
+        layout.addWidget(lbl_info)
+        
+        # Content Split
+        content_layout = QHBoxLayout()
+        
+        # Inputs Group
+        in_group = QGroupBox("📥 Entradas (Inputs)")
+        in_group.setStyleSheet("QGroupBox { border: 1px solid #30363D; border-radius: 6px; margin-top: 20px; } QGroupBox::title { color: #58A6FF; }")
+        self.in_layout = QVBoxLayout()
+        in_group.setLayout(self.in_layout)
+        
+        # Outputs Group
+        out_group = QGroupBox("📤 Saídas (Outputs)")
+        out_group.setStyleSheet("QGroupBox { border: 1px solid #30363D; border-radius: 6px; margin-top: 20px; } QGroupBox::title { color: #58A6FF; }")
+        self.out_layout = QVBoxLayout()
+        out_group.setLayout(self.out_layout)
+        
+        content_layout.addWidget(in_group)
+        content_layout.addWidget(out_group)
+        layout.addLayout(content_layout)
+        
+        # Refresh Timer
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_io_status)
+        self.timer.start(200) # 5Hz Refresh
+        
+        # Initial Draw
+        self.input_widgets = {}
+        self.output_widgets = {}
+        self.init_ui()
+        
+        # Close Button
+        btn_close = QPushButton("Fechar")
+        btn_close.clicked.connect(self.accept)
+        btn_close.setStyleSheet("background-color: #21262D; border: 1px solid #30363D; padding: 8px;")
+        layout.addWidget(btn_close)
+        
+    def init_ui(self):
+        # Create widgets for Inputs
+        inputs = self.plc.get_input_states()
+        for name, state in inputs.items():
+            led = QLabel()
+            led.setFixedSize(16, 16)
+            lbl = QLabel(name)
+            
+            row = QHBoxLayout()
+            row.addWidget(led)
+            row.addWidget(lbl)
+            row.addStretch()
+            self.in_layout.addLayout(row)
+            self.input_widgets[name] = led
+
+        # Create widgets for Outputs
+        outputs = self.plc.get_output_states()
+        for name, state in outputs.items():
+            led = QLabel()
+            led.setFixedSize(16, 16)
+            lbl = QLabel(name)
+            
+            row = QHBoxLayout()
+            row.addWidget(led)
+            row.addWidget(lbl)
+            row.addStretch()
+            self.out_layout.addLayout(row)
+            self.output_widgets[name] = led
+            
+        self.update_io_status()
+            
+    def update_io_status(self):
+        # Update Inputs
+        inputs = self.plc.get_input_states()
+        for name, state in inputs.items():
+            if name in self.input_widgets:
+                color = "#2EA043" if state else "#30363D" # Green if ON, Dark Grey if OFF
+                self.input_widgets[name].setStyleSheet(f"background-color: {color}; border-radius: 8px; border: 1px solid #555;")
+                
+        # Update Outputs
+        outputs = self.plc.get_output_states()
+        for name, state in outputs.items():
+            if name in self.output_widgets:
+                color = "#238636" if state else "#30363D" # Green if ON
+                self.output_widgets[name].setStyleSheet(f"background-color: {color}; border-radius: 8px; border: 1px solid #555;")
