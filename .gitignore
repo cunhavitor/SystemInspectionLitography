@@ -28,8 +28,8 @@ data/
 
 # Ignore models contents usually
 models/*
-!models/patchcore448_v2/
+!models/bpo_rr125_patchcore_v2/
 
 # Whitelist required file types for this model
-!models/patchcore448_v2/*.bin
-!models/patchcore448_v2/*.onnx
+!models/bpo_rr125_patchcore_v2/*.bin
+!models/bpo_rr125_patchcore_v2/*.onnx

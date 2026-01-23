@@ -5,7 +5,7 @@ import time
 import os
 
 class GravityInspector:
-    def __init__(self, model_dir="models/patchcore448_v2", device="CPU"):
+    def __init__(self, model_dir="models/bpo_rr125_patchcore_v2", device="CPU"):
         """
         Inicializa o Motor de Inspeção.
         :param model_dir: Pasta onde estão os ficheiros model.xml e threshold_map.npy

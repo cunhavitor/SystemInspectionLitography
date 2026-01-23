@@ -6,7 +6,7 @@ import time
 
 class PatchCoreInferencer:
     def __init__(self, 
-                 model_dir="models/patchcore448_v2", 
+                 model_dir="models/bpo_rr125_patchcore_v2", 
                  device="CPU",
                  use_imagenet_norm=True, # Argument kept for compatibility, but logic is fixed as per prompt
                  normalize_scores=True, # Argument kept for compatibility
@@ -181,7 +181,7 @@ class PatchCoreInferencer:
             if raw_map.shape != self.bias_map.shape:
                  # Resize bias map if needed
                  # This can happen if output is 56x56 but bias is 448x448?
-                 # Bias map `models/patchcore448_v2/bias_map_final.npy` shape was (56, 56) in my test output.
+                 # Bias map `models/bpo_rr125_patchcore_v2/bias_map_final.npy` shape was (56, 56) in my test output.
                  # Raw map likely (56, 56) or similar.
                  if raw_map.shape != self.bias_map.shape:
                       print(f"Warning: Map shape mismatch. Raw: {raw_map.shape}, Bias: {self.bias_map.shape}")

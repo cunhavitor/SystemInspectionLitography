@@ -5,7 +5,7 @@ import os
 import time
 
 class PatchCoreInferencer:
-    def __init__(self, model_dir="models/patchcore448_v2", device="CPU"):
+    def __init__(self, model_dir="models/bpo_rr125_patchcore_v2", device="CPU"):
         self.model_dir = model_dir
         self.device = device
         self.mean = np.array([0.485, 0.456, 0.406])
