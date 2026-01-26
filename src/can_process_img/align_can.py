@@ -13,7 +13,7 @@ class CanAligner:
         self.ref_h, self.ref_w = self.ref_img.shape[:2]
         self.ref_gray = cv2.cvtColor(self.ref_img, cv2.COLOR_BGR2GRAY)
         
-        # Aplicar CLAHE para melhorar features do ORB (sugestão do usuário)
+        # Aplicar CLAHE para melhorar features do ORB
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         self.ref_gray_orb = clahe.apply(self.ref_gray)
         
