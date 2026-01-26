@@ -445,7 +445,8 @@ class NewOPDialog(QDialog):
         # 1. SKU / Modelo
         self.combo_sku = QComboBox()
         self.combo_sku.setStyleSheet("background-color: #21262D; border: 1px solid #30363D; padding: 5px; color: white;")
-        self.combo_sku.addItem("bpo_rr125") # Currently the only supported model
+        self.combo_sku.addItem("Bom Petisco Oleo - rr125")
+        self.combo_sku.addItem("Bom Petisco Azeite - rr125")
         # Add more items here if needed in future
         form_layout.addRow("SKU / Modelo:", self.combo_sku)
         
@@ -845,18 +846,20 @@ class InspectionWindow(QMainWindow):
         self.inspection_timeout_timer.setSingleShot(True)
         self.inspection_timeout_timer.timeout.connect(self.on_inspection_timeout)
         
-        # Load Aligner
+        # Load Aligner - NOW LOADED PER SKU in load_model_for_sku()
+        # Each SKU has its own reference image for alignment
         self.aligner = None
-        ref_path = 'models/can_reference/aligned_can_reference448.png'
-        if os.path.exists(ref_path):
-            try:
-                # FIX: Set target_size to 448x448 to match PatchCore model
-                self.aligner = CanAligner(ref_path, target_size=(448, 448))
-                print(f"Aligner loaded with reference: {ref_path}")
-            except Exception as e:
-                print(f"Failed to load aligner: {e}")
-        else:
-            print(f"Reference image not found at {ref_path}")
+        # ref_path = 'models/can_reference/aligned_can_reference448.png'
+        # if os.path.exists(ref_path):
+        #     try:
+        #         # FIX: Set target_size to 448x448 to match PatchCore model
+        #         self.aligner = CanAligner(ref_path, target_size=(448, 448))
+        #         print(f"Aligner loaded with reference: {ref_path}")
+        #     except Exception as e:
+        #         print(f"Failed to load aligner: {e}")
+        # else:
+        #     print(f"Reference image not found at {ref_path}")
+
 
 
 
@@ -913,6 +916,79 @@ class InspectionWindow(QMainWindow):
 
         # Load saved state if available
         self.load_op_state()
+        
+    def load_model_for_sku(self, sku):
+        """
+        Load the appropriate PatchCore model based on the SKU.
+        
+        Args:
+            sku: SKU identifier (e.g., 'Bom Petisco Oleo - rr125', 'Bom Petisco Azeite - rr125', 'Bom Petisco Azeite - rr125')
+        """
+        # Map SKU to model directory
+        sku_model_map = {
+            'Bom Petisco Oleo - rr125': 'models/bpo_rr125_patchcore_v2',
+            'Bom Petisco Azeite - rr125': 'models/bpAz_rr125_patchcore_v2'
+        }
+        
+        # Map SKU to reference image for alignment
+        sku_reference_map = {
+            'Bom Petisco Oleo - rr125': 'models/can_reference/aligned_can_reference448_bpo-rr125.png',
+            'Bom Petisco Azeite - rr125': 'models/can_reference/aligned_can_reference448_bpAz-rr125.png'
+        }
+        
+        model_dir = sku_model_map.get(sku)
+        ref_path = sku_reference_map.get(sku)
+        
+        if model_dir is None:
+            print(f"WARNING: Unknown SKU '{sku}'. Using default model.")
+            model_dir = 'models/bpo_rr125_patchcore_v2'
+            ref_path = 'models/can_reference/aligned_can_reference448_bpo-rr125.png'
+        
+        if not os.path.exists(model_dir):
+            print(f"ERROR: Model directory '{model_dir}' not found for SKU '{sku}'")
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Modelo Não Encontrado", 
+                              f"O modelo para o SKU '{sku}' não foi encontrado em:\n{model_dir}\n\n"
+                              f"Verifique se os arquivos do modelo estão presentes.")
+            return False
+        
+        try:
+            print(f"Loading model for SKU '{sku}' from '{model_dir}'...")
+            self.inferencer = PatchCoreInferencer(model_dir=model_dir)
+            
+            # Apply user's saved threshold (Limiar Max) to the new model
+            if hasattr(self, 'threshold_spinbox'):
+                user_threshold = self.threshold_spinbox.value()
+                self.inferencer.threshold = user_threshold
+                print(f"✓ PatchCore model loaded successfully for SKU '{sku}'")
+                print(f"  Default threshold: 10.0 → User threshold: {user_threshold}")
+            else:
+                # During initialization, spinbox doesn't exist yet
+                # Threshold will be set later in _setup_ui
+                print(f"✓ PatchCore model loaded successfully for SKU '{sku}'")
+                print(f"  Threshold: {self.inferencer.threshold} (will be updated after UI setup)")
+            
+            # Load SKU-specific reference image for alignment
+            if ref_path and os.path.exists(ref_path):
+                try:
+                    self.aligner = CanAligner(ref_path, target_size=(448, 448))
+                    print(f"✓ Aligner loaded with SKU-specific reference: {ref_path}")
+                except Exception as e:
+                    print(f"WARNING: Failed to load aligner for SKU '{sku}': {e}")
+                    self.aligner = None
+            else:
+                print(f"WARNING: Reference image not found at {ref_path}")
+                print(f"  Alignment will be skipped for SKU '{sku}'")
+                self.aligner = None
+            
+            return True
+        except Exception as e:
+            print(f"Failed to load PatchCore model for SKU '{sku}': {e}")
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Erro ao Carregar Modelo", 
+                               f"Falha ao carregar o modelo para SKU '{sku}':\n{str(e)}")
+            return False
+
         
     def _setup_ui(self):
         central_widget = QWidget()
@@ -1569,6 +1645,16 @@ class InspectionWindow(QMainWindow):
         if dlg.exec():
             data = dlg.get_data()
             
+            # Load the appropriate model for this SKU
+            sku = data['sku']
+            if not self.load_model_for_sku(sku):
+                # Model loading failed, don't proceed with OP creation
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Erro", 
+                                  f"Não foi possível carregar o modelo para o SKU '{sku}'.\n"
+                                  "A Ordem de Produção não será criada.")
+                return
+            
             # Capture Start Time for Report
             data['start_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.current_job = data
@@ -1629,7 +1715,8 @@ class InspectionWindow(QMainWindow):
             
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.information(self, "OP Criada", 
-                                  f"Ordem de Produção configurada com sucesso!\n\n{log_msg}")
+                                  f"Ordem de Produção configurada com sucesso!\n\n{log_msg}\n\n"
+                                  f"Modelo carregado: {sku}")
 
     def start_inspection_mode(self):
         if self.is_running:
@@ -1637,7 +1724,7 @@ class InspectionWindow(QMainWindow):
             
         if not self.current_job:
             # Fallback
-            self.current_job = {"sku": "bpo_rr125", "op": "DEFAULT", "qty": 0}
+            self.current_job = {"sku": "Bom Petisco Oleo - rr125", "op": "DEFAULT", "qty": 0}
             print("Warning: Starting without explicit job. Using default.")
             
         # Reset Session Counters
@@ -1666,7 +1753,7 @@ class InspectionWindow(QMainWindow):
             now = datetime.now()
             # SAVE the start time so it persists for this "Default" job
             if not self.current_job:
-                 self.current_job = {"sku": "bpo_rr125", "op": "DEFAULT", "qty": 0}
+                 self.current_job = {"sku": "Bom Petisco Oleo - rr125", "op": "DEFAULT", "qty": 0}
             
             self.current_job['start_time'] = now.strftime("%Y-%m-%d %H:%M:%S")
             disp_str = now.strftime('%d/%m/%Y %H:%M')
@@ -2447,6 +2534,10 @@ Yield (Aprov.%): {(self.ok_count/self.total_count*100) if self.total_count > 0 e
             if self.current_job:
                 op_id = self.current_job.get("op", "UNKNOWN")
                 sku = self.current_job.get("sku", "UNKNOWN")
+                
+                # Load the appropriate model for this SKU
+                print(f"Restoring OP state for SKU: {sku}")
+                self.load_model_for_sku(sku)
                 
                 # Update Status Bar
                 if hasattr(self, 'lbl_current_op'):
