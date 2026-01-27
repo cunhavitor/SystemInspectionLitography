@@ -1,0 +1,20 @@
+{
+    "active_sku": "bom_petisco_oleo_rr125",
+    "skus": {
+        "default": {
+            "name": "Default SKU",
+            "model_path": "models/patchcore448/results/IM224_Ensemble_L2_3_0.01_0.1_0_0/mvtec_ad/can/seed_0/state_dict.pth",
+            "reference_path": "models/can_reference/aligned_can_reference448.png"
+        },
+        "bom_petisco_azeite_rr125": {
+            "name": "Bom Petisco Azeite - rr125",
+            "model_path": "models/bpAz_rr125_patchcore_v2",
+            "reference_path": "models/can_reference/aligned_can_reference448_bpAz-rr125.png"
+        },
+        "bom_petisco_oleo_rr125": {
+            "name": "Bom Petisco \u00d3leo - rr125",
+            "model_path": "models/bpo_rr125_patchcore_v2",
+            "reference_path": "models/can_reference/aligned_can_reference448_bpo-rr125.png"
+        }
+    }
+}

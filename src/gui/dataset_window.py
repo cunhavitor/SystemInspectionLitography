@@ -1,8 +1,10 @@
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                               QLabel, QPushButton, QStatusBar, QSpinBox, QProgressBar, QGroupBox, QFormLayout, QTextEdit, QFileDialog)
+                               QLabel, QPushButton, QStatusBar, QSpinBox, QProgressBar, QGroupBox, QFormLayout, QTextEdit, QFileDialog, QComboBox, QDialog, QLineEdit, QDialogButtonBox)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from ..camera import Camera
+from ..sku_manager import SKUManager
+from .dataset_window_dialogs import AddNewSKUDialog
 from .camera_thread import CameraThread
 from ..utils import save_image
 from ..can_process_img.detect_corner import CornerDetector
@@ -32,7 +34,13 @@ class DatasetWindow(QMainWindow):
     def __init__(self, config, dashboard=None):
         super().__init__()
         self.config = config
+        self.config = config
         self.dashboard = dashboard
+        
+        # Init SKU Manager
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        self.sku_manager = SKUManager(os.path.join(base_dir, 'config', 'skus.json'))
+        
         self.camera = None
         self.camera_thread = None
         self.last_frame = None
@@ -78,6 +86,34 @@ class DatasetWindow(QMainWindow):
         title.setStyleSheet("font-size: 18px; font-weight: bold;")
         header.addWidget(title)
         header.addStretch()
+        
+        # SKU Selection
+        sku_layout = QHBoxLayout()
+        sku_layout.addWidget(QLabel("SKU:"))
+        
+        self.sku_combo = QComboBox()
+        self.sku_combo.setMinimumWidth(200)
+        self.sku_combo.setStyleSheet("background-color: #333; color: white; padding: 5px;")
+        
+        # Populate SKUs
+        sku_names = self.sku_manager.get_sku_names()
+        self.sku_combo.addItems(sku_names)
+        
+        # Set current selection
+        current_sku_data = self.sku_manager.get_active_sku()
+        if current_sku_data:
+            self.sku_combo.setCurrentText(current_sku_data.get("name", ""))
+            
+        self.sku_combo.currentTextChanged.connect(self.on_sku_changed)
+        sku_layout.addWidget(self.sku_combo)
+        
+        btn_add_sku = QPushButton("➕ New SKU")
+        btn_add_sku.setStyleSheet("background-color: #2196F3; color: white; padding: 5px 10px; border-radius: 3px;")
+        btn_add_sku.clicked.connect(self.add_new_sku)
+        sku_layout.addWidget(btn_add_sku)
+        
+        header.addLayout(sku_layout)
+        # header.addStretch() # Removed one stretch to balance
         main_layout.addLayout(header)
         
         # Main content: Camera on Left, Logs on Right
@@ -246,8 +282,14 @@ class DatasetWindow(QMainWindow):
             
             self.resizer = CanResizer(size=(448, 448))
             
-            # Load reference image for alignment
-            ref_path = os.path.join(base_dir, 'models', 'can_reference', 'aligned_can_reference448.png')
+            # Load reference image for alignment from active SKU
+            sku_data = self.sku_manager.get_active_sku()
+            ref_path = sku_data.get("reference_path", "")
+            
+            # Fallback if empty or not found (try default location)
+            if not ref_path or not os.path.exists(ref_path):
+                 ref_path = os.path.join(base_dir, 'models', 'can_reference', 'aligned_can_reference448.png')
+            
             if os.path.exists(ref_path):
                 self.aligner = CanAligner(ref_path, target_size=(448, 448))
                 self.reference_image = cv2.imread(ref_path)
@@ -798,17 +840,6 @@ class DatasetWindow(QMainWindow):
                 else:
                     success_rate = 0
                 
-                # Update detailed stats
-                if hasattr(self, 'session_start_time') and self.session_start_time:
-                    duration = datetime.now() - self.session_start_time
-                    hours, remainder = divmod(int(duration.total_seconds()), 3600)
-                    minutes, seconds = divmod(remainder, 60)
-                    session_time = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                else:
-                    session_time = "00:00:00"
-                    
-                avg_cans = self.total_cans_processed / self.captured_count if self.captured_count > 0 else 0
-                
                 self.lbl_status.setText(
                     f"Captures: {self.captured_count} (avg {avg_cans:.1f} cans/capture)\n"
                     f"Total cans: {self.total_cans_processed}\n"
@@ -816,6 +847,8 @@ class DatasetWindow(QMainWindow):
                     f"Session time: {session_time}\n"
                     f"Dataset: {os.path.basename(self.dataset_folder)}"
                 )
+            
+
                 
             else:
                 self.log("ℹ️ Clean operation cancelled.")
@@ -843,3 +876,45 @@ class DatasetWindow(QMainWindow):
         if self.camera:
             self.camera.release()
         event.accept()
+
+    def add_new_sku(self):
+        """Open dialog to add a new SKU configuration"""
+        dialog = AddNewSKUDialog(self)
+        if dialog.exec():
+            data = dialog.get_data()
+            name = data['name']
+            model_path = data['model_path']
+            ref_path = data['reference_path']
+            
+            if not name or not ref_path:
+                self.status_bar.showMessage("Error: Name and Reference Image are required", 5000)
+                return
+            
+            # Add to manager
+            self.sku_manager.add_sku(name, model_path, ref_path)
+            
+            # Update combo box
+            self.sku_combo.addItem(name)
+            
+            # Select the new SKU
+            self.sku_combo.setCurrentText(name)
+            
+            self.log("\n" + "="*50)
+            self.log(f"✅ New SKU added: {name}")
+            self.log(f"   Ref: {os.path.basename(ref_path)}")
+            if model_path:
+                self.log(f"   Model: {os.path.basename(model_path)}")
+
+    def on_sku_changed(self, text):
+        """Handle SKU selection change"""
+        if not text: return
+        
+        # Update active SKU in manager
+        if self.sku_manager.set_active_sku_by_name(text):
+            self.log("\n" + "="*50)
+            self.log(f"🔄 Switched SKU to: {text}")
+            
+            # Reload processors using new configuration
+            self._init_processors()
+        else:
+            self.log(f"❌ Failed to switch SKU: {text}")

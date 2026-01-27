@@ -1,0 +1,19 @@
+
+========================================
+RELATÓRIO DE PRODUÇÃO - Bom Petisco Azeite - rr125
+========================================
+OP: 123
+Usuario: admin
+Data Início: 2026-01-26 11:23:42
+Data Fim:    2026-01-27 15:50:29
+
+Estatísticas Finais:
+-------------------
+Total Produzido: 1488
+Aprovadas (OK):  1122
+Reprovadas (NG): 366
+  - Defeitos:    366
+  - Qualidade:   0
+  
+Yield (Aprov.%): 75.40%
+========================================
