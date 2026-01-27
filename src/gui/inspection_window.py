@@ -135,11 +135,11 @@ class InspectionWorker(QThread):
                     # cv2.imwrite(f'debug_pi_can{can_id:02d}_4_normalized.png', normalized_can)
                     
                     print(f"\n=== CAN {can_id} PREPROCESSING DEBUG ===")
-                    print(f"1. Raw crop    - Shape: {can_img.shape}, Mean: {np.mean(can_img):.2f}")
-                    print(f"2. Resized     - Shape: {resized_can.shape}, Mean: {np.mean(resized_can):.2f}")
-                    print(f"3. Aligned     - Shape: {aligned_can.shape}, Mean: {np.mean(aligned_can):.2f}")
-                    print(f"4. Normalized  - Shape: {normalized_can.shape}, Mean: {np.mean(normalized_can):.2f}")
-                    print(f"💾 Saved debug output for Can {can_id}\n")
+                    #print(f"1. Raw crop    - Shape: {can_img.shape}, Mean: {np.mean(can_img):.2f}")
+                    #print(f"2. Resized     - Shape: {resized_can.shape}, Mean: {np.mean(resized_can):.2f}")
+                    #print(f"3. Aligned     - Shape: {aligned_can.shape}, Mean: {np.mean(aligned_can):.2f}")
+                    #print(f"4. Normalized  - Shape: {normalized_can.shape}, Mean: {np.mean(normalized_can):.2f}")
+                    #print(f"💾 Saved debug output for Can {can_id}\n")
                 
                 # Quality Check: Brightness threshold (too bright = bad crop/missing can)
                 brightness = np.mean(normalized_can)
@@ -170,7 +170,7 @@ class InspectionWorker(QThread):
                         
                     # Use aligned_can (Inferencer V2 handles CLAHE+Resize+Norm internaly)
                     score, is_normal, viz, heatmap = self.inferencer.predict(aligned_can)
-                    print(f"DEBUG: Can #{can_id} Score: {score:.8f}")
+                    #print(f"DEBUG: Can #{can_id} Score: {score:.8f}")
                     
                     can_duration = (time.time() - can_start_time) * 1000
                     
@@ -1759,7 +1759,7 @@ class InspectionWindow(QMainWindow):
             disp_str = now.strftime('%d/%m/%Y %H:%M')
             
         if hasattr(self, 'lbl_stats_start'):
-             print(f"DEBUG: Setting Start Time to {disp_str}")
+             #print(f"DEBUG: Setting Start Time to {disp_str}")
              self.lbl_stats_start.setText(disp_str)
              # Always reset end time when starting/resuming
              if hasattr(self, 'lbl_stats_end'):
@@ -1782,7 +1782,7 @@ class InspectionWindow(QMainWindow):
         now = datetime.now()
         if hasattr(self, 'lbl_stats_end'):
             stop_str = now.strftime('%d/%m/%Y %H:%M')
-            print(f"DEBUG: Setting Stop Time to {stop_str}")
+            #print(f"DEBUG: Setting Stop Time to {stop_str}")
             self.lbl_stats_end.setText(stop_str)
         else:
             print("DEBUG: lbl_stats_end NOT FOUND")
