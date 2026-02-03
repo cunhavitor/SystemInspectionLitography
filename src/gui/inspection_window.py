@@ -222,12 +222,46 @@ class InspectionWorker(QThread):
                 x1, y1, x2, y2 = bbox
                 cv2.rectangle(annotated_sheet, (x1, y1), (x2, y2), color, 2)
                 
-                label = f"#{can_id} {status_text} {score:.2f} ({can_duration:.0f}ms)"
-                (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-                cv2.rectangle(annotated_sheet, (x1, y1 - 20), (x1 + text_w, y1), color, -1)
+                label = f"#{can_id} {status_text}\n{score:.2f}"
+                font_scale = 1.2
+                thickness = 2
+                
+                # Split lines: handle both \n and \r
+                lines = label.replace('\r', '').split('\n')
+                
+                # Calculate max width and total height
+                max_width = 0
+                total_height = 0
+                line_heights = []
+                
+                for line in lines:
+                   (txt_w, txt_h), baseline = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                   max_width = max(max_width, txt_w)
+                   # Add padding between lines
+                   h_with_padding = txt_h + baseline + 10
+                   line_heights.append(h_with_padding)
+                   total_height += h_with_padding
+                
+                # Draw background box (inside the bbox, aligned to top)
+                box_buffer = 10
+                box_top_y = y1
+                box_bottom_y = y1 + total_height + box_buffer
+                
+                cv2.rectangle(annotated_sheet, (x1, box_top_y), (x1 + max_width + 10, box_bottom_y), color, -1)
+                
                 text_color = (0, 0, 0) if is_normal else (255, 255, 255)
-                cv2.putText(annotated_sheet, label, (x1, y1 - 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1)
+                
+                # Draw each line
+                current_y = box_top_y + box_buffer
+                for i, line in enumerate(lines):
+                    # getTextSize return height is from baseline to top. putText y is baseline.
+                    (txt_w, txt_h), baseline = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                    current_y += txt_h # move down by text height
+                    
+                    cv2.putText(annotated_sheet, line, (x1 + 5, current_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness)
+                    
+                    current_y += baseline + 10 # move down for next line
                 
                 logs.append((can_id, score, is_normal, can_duration))
                 

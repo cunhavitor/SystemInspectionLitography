@@ -3,7 +3,7 @@
     "first_can_center_y_mm": 68.0,
     "step_x_mm": 120.52,
     "step_y_mm": 132.19,
-    "tolerance_box_mm": 15.0,
+    "tolerance_box_mm": 12.0,
     "margin_left_right_mm": 1.59,
     "margin_top_bottom_mm": 10.05
 }
