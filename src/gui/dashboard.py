@@ -163,6 +163,27 @@ class DashboardWindow(QMainWindow):
             self.inspection_window.showMaximized()
         
     def open_dataset(self):
+        # Check for background inspection conflict
+        if self.inspection_window is not None:
+            # Case 1: Inspection IS Running (Active) -> Filter with Prompt
+            if hasattr(self.inspection_window, 'is_running') and self.inspection_window.is_running:
+                reply = QMessageBox.question(self, "Camera em Uso", 
+                    "A Inspeção está a correr activamente.\n"
+                    "Para usar o Dataset, é necessário parar a inspeção.\n\n"
+                    "Deseja parar a inspeção agora?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                    
+                if reply == QMessageBox.Yes:
+                    self.inspection_window.stop_inspection_mode() # Safe method
+                    self.inspection_window.close()
+                    self.inspection_window = None
+                else:
+                    return
+            else:
+                # Case 2: Inspection exists but is STOPPED -> Silent Close & Proceed
+                self.inspection_window.close()
+                self.inspection_window = None
+
         self.hide()
         self.window = DatasetWindow(self.config, self)
         # Set icon on dataset window
@@ -171,6 +192,27 @@ class DashboardWindow(QMainWindow):
         self.window.show()
         
     def open_adjustment(self):
+        # Check for background inspection conflict
+        if self.inspection_window is not None:
+            # Case 1: Inspection IS Running (Active) -> Filter with Prompt
+            if hasattr(self.inspection_window, 'is_running') and self.inspection_window.is_running:
+                reply = QMessageBox.question(self, "Camera em Uso", 
+                    "A Inspeção está a correr activamente.\n"
+                    "Para usar a Calibração, é necessário parar a inspeção.\n\n"
+                    "Deseja parar a inspeção agora?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                    
+                if reply == QMessageBox.Yes:
+                    self.inspection_window.stop_inspection_mode() # Safe method
+                    self.inspection_window.close()
+                    self.inspection_window = None
+                else:
+                    return
+            else:
+                # Case 2: Inspection exists but is STOPPED -> Silent Close & Proceed
+                self.inspection_window.close()
+                self.inspection_window = None
+
         self.hide()
         self.window = AdjustmentWindow(self.config, self)
         # Set icon on adjustment window

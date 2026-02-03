@@ -55,7 +55,15 @@ class Camera:
                 time.sleep(0.5)
                 
                 print("Picamera2 initialized with Dual Streams (main + lores)")
-            except RuntimeError as e:
+            except Exception as e:
+                # Ensure we release resources if init failed
+                print(f"Error intializing Picamera2: {e}")
+                if hasattr(self, 'picam') and self.picam:
+                    try:
+                        self.picam.close()
+                    except:
+                        pass
+                
                 if "Device or resource busy" in str(e):
                     raise RuntimeError("Camera is already in use by another process. Please close all camera applications and try again.")
                 raise

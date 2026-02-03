@@ -113,9 +113,18 @@ class CornerDetector:
         """Draw detected corners on the image"""
         preview = image.copy()
         for i, p in enumerate(corners):
-            cv2.circle(preview, (int(p[0]), int(p[1])), 5, (0, 255, 0), -1)
-            cv2.putText(preview, f"C{i}", (int(p[0])+10, int(p[1])), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            # Draw Crosshair (Target)
+            cx, cy = int(p[0]), int(p[1])
+            size = 50
+            # Horizontal line
+            cv2.line(preview, (cx - size, cy), (cx + size, cy), (0, 255, 0), 3)
+            # Vertical line
+            cv2.line(preview, (cx, cy - size), (cx, cy + size), (0, 255, 0), 3)
+            # Center dot
+            cv2.circle(preview, (cx, cy), 2, (0, 0, 255), -1)
+            
+            cv2.putText(preview, f"C{i}", (cx + 25, cy - 25), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 255, 0), 4)
         return preview
         
     def visualize_search_areas(self, image):

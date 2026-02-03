@@ -1,0 +1,19 @@
+
+========================================
+RELATÓRIO DE PRODUÇÃO - Bom Petisco Oleo - rr125
+========================================
+OP: 12345
+Usuario: admin
+Data Início: 2026-01-30 11:31:55
+Data Fim:    2026-01-30 12:08:15
+
+Estatísticas Finais:
+-------------------
+Total Produzido: 144
+Aprovadas (OK):  0
+Reprovadas (NG): 144
+  - Defeitos:    144
+  - Qualidade:   0
+  
+Yield (Aprov.%): 0.00%
+========================================

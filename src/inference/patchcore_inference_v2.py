@@ -43,9 +43,13 @@ class PatchCoreInferencer:
     def preprocess(self, image):
         """
         CLAHE -> Resize -> Normalize -> Transpose
+        Returns: input_tensor, resized_image, timings_dict
         """
+        t0 = time.time()
+        
         # 1. Apply CLAHE (Centralized here)
         image = self.apply_clahe(image)
+        t1 = time.time()
 
         # 2. Resize to 448x448
         # If image is already 448x448, resize is no-op or safe
@@ -53,6 +57,7 @@ class PatchCoreInferencer:
             resized = cv2.resize(image, (448, 448))
         else:
             resized = image.copy()
+        t2 = time.time()
         
         # 3. Convert to RGB (OpenCV uses BGR by default)
         rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
@@ -64,21 +69,30 @@ class PatchCoreInferencer:
         # 5. Transpose to [1, 3, 448, 448]
         input_tensor = np.transpose(rgb_image, (2, 0, 1))
         input_tensor = np.expand_dims(input_tensor, axis=0)
+        t3 = time.time()
         
-        return input_tensor, resized
+        timings = {
+            'clahe': (t1 - t0) * 1000,
+            'resize': (t2 - t1) * 1000,
+            'norm': (t3 - t2) * 1000
+        }
+        
+        return input_tensor, resized, timings
 
     def infer(self, image):
         """
         Full inference pipeline.
-        Returns: score, clean_map, anomaly_map_viz
+        Returns: score, clean_map, anomaly_map_viz, timings
         """
         start_time = time.time()
         
         # Preprocess
-        input_tensor, resized_image = self.preprocess(image)
+        input_tensor, resized_image, pre_timings = self.preprocess(image)
+        t_pre = time.time()
         
         # Inference
         results = self.compiled_model([input_tensor])[self.output_layer]
+        t_infer = time.time()
         
         # Post-process (based on Anomalib output structure usually [1, 1, 448, 448] or similar)
         # Squeeze to remove batch dim if necessary: [1, H, W] -> [H, W]
@@ -103,7 +117,7 @@ class PatchCoreInferencer:
                   self.bias_map = cv2.resize(self.bias_map, (raw_map.shape[1], raw_map.shape[0]))
              
              clean_map = np.maximum(raw_map - self.bias_map, 0)
-             print(f"CLEAN Map Max (Score): {np.max(clean_map):.4f}", flush=True)
+             # print(f"CLEAN Map Max (Score): {np.max(clean_map):.4f}", flush=True)
         else:
              clean_map = raw_map
 
@@ -113,10 +127,14 @@ class PatchCoreInferencer:
         # Visualization
         anomaly_map_viz = self.visualize(clean_map, resized_image)
         
-        infer_time = time.time() - start_time
-        # print(f"Inference time: {infer_time:.4f}s")
+        total_time = (time.time() - start_time) * 1000
+        infer_time = (t_infer - t_pre) * 1000
         
-        return score, clean_map, anomaly_map_viz
+        timings = pre_timings
+        timings['openvino'] = infer_time
+        timings['total_infer'] = total_time
+        
+        return score, clean_map, anomaly_map_viz, timings
 
     def visualize(self, anomaly_map, original_image):
         """
@@ -154,10 +172,10 @@ class PatchCoreInferencer:
         """
         API wrapper for inspection.py compatibility.
         """
-        score, clean_map, viz = self.infer(image)
+        score, clean_map, viz, timings = self.infer(image)
         # Usar o threshold configurado dinamicamente
         is_normal = score < self.threshold
-        return score, is_normal, viz, clean_map
+        return score, is_normal, viz, clean_map, timings
 
 if __name__ == "__main__":
     # Test block

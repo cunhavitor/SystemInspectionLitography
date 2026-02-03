@@ -847,7 +847,7 @@ class AdjustmentWindow(QMainWindow):
         if self.wiz_state['cans']:
             # Pick the middle can (likely to be good) or first
             sample_can = self.wiz_state['cans'][0] 
-            resized = self.resizer.process(sample_can)
+            resized = self.resizer.process(sample_can['image'])
             
             self.wiz_state['resized'] = [resized] # Store for alignment
             self.display_image(resized)

@@ -120,9 +120,42 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
     """
     Perform full inspection pipeline on a single frame.
     """
+    import time
+    
+    t_trigger = time.time()
+    timings = {}
+
     try:
-        # ... (previous code truncated for brevity)
+        # Step 1: Detect Corners
+        print("  [1/5] Detecting Corners...")
+        t0 = time.time()
+        corners = detector.detect(frame)
+        timings['detect_corners'] = (time.time() - t0) * 1000
+
+        if corners is None:
+            print(" ⚠ No corners found.")
+            return
+
+        # Step 2: Rectify Sheet
+        print("  [2/5] Rectifying Sheet...")
+        t0 = time.time()
+        rectified = rectifier.rectify(frame, corners)
+        timings['rectify'] = (time.time() - t0) * 1000
         
+        if rectified is None:
+             print(" ⚠ Rectification failed.")
+             return
+
+        # Step 3: Crop Cans
+        print(f"  [3/5] Cropping Cans...")
+        t0 = time.time()
+        cans = cropper.crop(rectified)
+        timings['crop'] = (time.time() - t0) * 1000
+
+        if not cans:
+            print(" ⚠ No cans found.")
+            return
+
         # Step 4: Inspect Each Can
         print(f"  [4/5] Running PatchCore on {len(cans)} cans...")
         
@@ -130,23 +163,41 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
         ok_count = 0
         ng_count = 0
         
-        for i, item in enumerate(cans[:10]): 
+        t_cans_start = time.time()
+        
+        # Accumulators for average
+        acc_align = 0
+        acc_infer = 0
+        acc_clahe = 0
+        acc_resize = 0
+        acc_norm = 0
+        acc_ov = 0
+
+        for i, item in enumerate(cans): 
             can_id = item['id']
             can_img = item['image'] # Imagem cortada (BGR Raw)
             bbox = item['bbox']
             
             # 1. ALINHAMENTO
+            t_align_0 = time.time()
             if aligner:
                 aligned_can = aligner.align(can_img)
             else:
                 aligned_can = can_img
+            acc_align += (time.time() - t_align_0) * 1000
             
             # 3. INFERÊNCIA
             # Passamos a imagem RAW ALINHADA. O inferencer faz CLAHE + Resize.
-            score, is_normal, heatmap = inferencer.predict(aligned_can)
+            score, is_normal, heatmap, clean_map, infer_metrics = inferencer.predict(aligned_can)
+            
+            acc_infer += infer_metrics['total_infer']
+            acc_clahe += infer_metrics['clahe']
+            acc_resize += infer_metrics['resize']
+            acc_norm += infer_metrics['norm']
+            acc_ov += infer_metrics['openvino']
             
             # DEBUG: Ver se o score baixou para valores normais (0 a 5)
-            print(f"    DEBUG: Can #{can_id} Score: {score:.4f}")
+            # print(f"    DEBUG: Can #{can_id} Score: {score:.4f}")
             
             if is_normal:
                 ok_count += 1
@@ -165,6 +216,10 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
                 save_dir = os.path.join("data", "defects", year_dir, month_dir)
                 os.makedirs(save_dir, exist_ok=True)
                 
+                # Re-generate CLAHE for visualization save (slightly inefficient but safe)
+                img_clahe = apply_clahe(aligned_can) if aligner else apply_clahe(can_img)
+
+                timestamp = now.strftime("%Y%m%d_%H%M%S")
                 defect_filename = os.path.join(save_dir, f"NOK_{timestamp}_can{can_id}_score{score:.2f}.png")
                 cv2.imwrite(defect_filename, img_clahe)
 
@@ -174,12 +229,39 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
             cv2.putText(annotated_sheet, f"{status} {score:.1f}", (x1, y1-5), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
+        num_cans = len(cans)
+        timings['total_cans'] = (time.time() - t_cans_start) * 1000
+        timings['total_pipeline'] = (time.time() - t_trigger) * 1000
+        
         # Mostrar
         cv2.imshow("Inspection Result", cv2.resize(annotated_sheet, (1024, 768)))
         print(f"\n✓ Done: {ok_count} OK, {ng_count} NG")
+        
+        # PRINT TIMINGS REPORT
+        print("\n" + "="*50)
+        print(f" PERFORMANCE REPORT ({num_cans} cans)")
+        print("="*50)
+        print(f" TOTAL TIME:         {timings['total_pipeline']:.1f} ms  ({timings['total_pipeline']/1000:.2f} s)")
+        print("-" * 50)
+        print(f" 1. Detect Corners:  {timings['detect_corners']:.1f} ms")
+        print(f" 2. Rectify Sheet:   {timings['rectify']:.1f} ms")
+        print(f" 3. Crop Cans:       {timings['crop']:.1f} ms")
+        print("-" * 50)
+        print(f" 4. Processing Loop: {timings['total_cans']:.1f} ms")
+        if num_cans > 0:
+            print(f"    - Avg Per Can:   {timings['total_cans']/num_cans:.1f} ms")
+            print(f"    - Avg Align:     {acc_align/num_cans:.1f} ms")
+            print(f"    - Avg Infer:     {acc_infer/num_cans:.1f} ms")
+            print(f"        * CLAHE:     {acc_clahe/num_cans:.1f} ms")
+            print(f"        * Resize:    {acc_resize/num_cans:.1f} ms")
+            print(f"        * Norm:      {acc_norm/num_cans:.1f} ms")
+            print(f"        * OpenVINO:  {acc_ov/num_cans:.1f} ms")
+        print("="*50 + "\n")
+
         cv2.waitKey(0)
         
     except Exception as e:
         print(f" ✗ Error: {e}")
         import traceback
         traceback.print_exc()
+```

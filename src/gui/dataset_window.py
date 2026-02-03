@@ -810,35 +810,77 @@ class DatasetWindow(QMainWindow):
             self.log(f"⚠️ Found {count} potential outliers.")
             
             # Ask for confirmation
-            msg = f"Found {count} images that deviate significantly from the mean.\n\n"
-            msg += "These may pollute the PatchCore memory bank.\n"
-            msg += "Do you want to move them to the 'debug' folder?"
+            msg = f"Found {count} initial outliers.\n\n"
+            msg += "These deviate significantly from the mean (>2.0σ).\n"
+            msg += "Do you want to recursively clean the dataset until no outliers remain?"
             
+            # Simple Yes/No logic. Yes = Recursive Clean. No = Cancel.
             reply = QMessageBox.question(self, "Found Outliers", msg, 
                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             
             if reply == QMessageBox.Yes:
-                self.log(f"📦 Moving {count} outliers to 'debug' folder...")
-                self.btn_clean.setText("Moving files...")
-                QApplication.processEvents()
+                self.log(f"🔄 Starting recursive cleaning...")
+                self.btn_clean.setEnabled(False) 
                 
-                moved = generator.move_outliers_to_debug()
+                total_moved = 0
+                max_iterations = 10
+                iteration = 0
                 
-                self.log(f"✅ Moved {moved} images to debug.")
-                self.log("   Training set is now cleaner.")
+                while True:
+                    iteration += 1
+                    
+                    # 1. Move current outliers
+                    current_outliers = len(generator.outliers)
+                    if current_outliers == 0:
+                        break
+                        
+                    self.log(f"📦 Iteration {iteration}: Moving {current_outliers} outliers...")
+                    QApplication.processEvents()
+                    
+                    moved = generator.move_outliers_to_debug()
+                    total_moved += moved
+                    
+                    # Safety break
+                    if iteration >= max_iterations:
+                        self.log("⚠️ Max iterations reached. Stopping.")
+                        break
+                    
+                    # 2. Re-analyze logic
+                    # We must re-instantiate because analyze_dataset() relies on __init__ scanning folders
+                    # optimization: create new generator to rescan
+                    generator = DatasetReportGenerator(self.dataset_folder)
+                    generator.analyze_dataset()
+                    
+                    if not generator.outliers:
+                        self.log("✅ Dataset stabilized (no more outliers).")
+                        break
+                    
+                    self.log(f"🔎 Found {len(generator.outliers)} new outliers after cleaning...")
                 
-                # Update stats display
-                # We subtract moved files from good count and add to bad count
-                # Note: this is an approximation as we don't know if they were originally 'good'
-                # But typically they are in 'train' so they were counted as good
-                self.total_good_cans -= moved
-                self.total_bad_cans += moved
+                
+                self.log(f"✅ Recursive cleaning complete.")
+                self.log(f"📦 Total moved: {total_moved} images.")
+                
+                # Update global counters
+                self.total_good_cans -= total_moved
+                self.total_bad_cans += total_moved
                 
                 # Update text
                 if self.total_cans_processed > 0:
                     success_rate = int((self.total_good_cans / self.total_cans_processed) * 100)
                 else:
                     success_rate = 0
+                
+                # Recalculate stats for display
+                avg_cans = self.total_cans_processed / self.captured_count if self.captured_count > 0 else 0
+                
+                if self.session_start_time:
+                    duration = datetime.now() - self.session_start_time
+                    hours, remainder = divmod(int(duration.total_seconds()), 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    session_time = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                else:
+                    session_time = "00:00:00"
                 
                 self.lbl_status.setText(
                     f"Captures: {self.captured_count} (avg {avg_cans:.1f} cans/capture)\n"
@@ -847,9 +889,9 @@ class DatasetWindow(QMainWindow):
                     f"Session time: {session_time}\n"
                     f"Dataset: {os.path.basename(self.dataset_folder)}"
                 )
-            
-
                 
+                QMessageBox.information(self, "Finished", f"Moved a total of {total_moved} outliers to debug folder.")
+
             else:
                 self.log("ℹ️ Clean operation cancelled.")
                 

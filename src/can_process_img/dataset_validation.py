@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import os
 
-def check_specular_reflection(img, threshold=250, max_pixel_count=500):
+def check_specular_reflection(img, threshold=254, max_pixel_count=5000):
     # Converte para cinzento se necessário
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     # Conta quantos pixéis estão quase em branco puro

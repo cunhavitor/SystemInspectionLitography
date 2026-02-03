@@ -71,22 +71,33 @@ class InspectionWorker(QThread):
             timestamp = start_time_dt.strftime("%Y%m%d_%H%M%S")
             start_time_str = start_time_dt.strftime("%H:%M:%S")
             
+            # Capture Total Pipeline Start Time
+            import time
+            t_trigger = time.time()
+            timings = {}
+            
             check_img = self.frame.copy()
             
             # --- Step 1: Detect Corners ---
             self.progress.emit("Detecting Corners...")
+            t0 = time.time()
             corners = self.detector.detect(check_img)
+            timings['detect_corners'] = (time.time() - t0) * 1000
             
             # --- Step 2: Rectify Sheet ---
             self.progress.emit("Rectifying Sheet...")
+            t0 = time.time()
             rectified = self.rectifier.get_warped(check_img, corners)
+            timings['rectify'] = (time.time() - t0) * 1000
             if rectified is None:
                 self.error.emit("Rectification Failed")
                 return
 
             # --- Step 3: Crop Cans ---
             self.progress.emit("Cropping Cans...")
+            t0 = time.time()
             cans = self.cropper.crop_cans(rectified)
+            timings['crop'] = (time.time() - t0) * 1000
             if not cans:
                 self.error.emit("No cans detected")
                 return
@@ -107,6 +118,15 @@ class InspectionWorker(QThread):
             
             # --- Step 4: Process Each Can ---
             import time
+            t_cans_start = time.time()
+            
+            # Accumulators for average
+            acc_align = 0
+            acc_infer = 0
+            acc_clahe = 0
+            acc_resize = 0
+            acc_norm = 0
+            acc_ov = 0
             
             for i, item in enumerate(cans):
                 can_id = item['id']
@@ -119,10 +139,12 @@ class InspectionWorker(QThread):
                 resized_can = self.resizer.process(can_img)
                 
                 # B. Align (REQUIRED for accurate scores)
+                t_align_0 = time.time()
                 if self.aligner:
                     aligned_can = self.aligner.align(resized_can)
                 else:
                     aligned_can = resized_can
+                acc_align += (time.time() - t_align_0) * 1000
                 
                 # C. Normalize with CLAHE
                 normalized_can = self.normalizer(aligned_can, target_size=(448, 448))
@@ -169,8 +191,14 @@ class InspectionWorker(QThread):
                         return
                         
                     # Use aligned_can (Inferencer V2 handles CLAHE+Resize+Norm internaly)
-                    score, is_normal, viz, heatmap = self.inferencer.predict(aligned_can)
+                    score, is_normal, viz, heatmap, infer_timings = self.inferencer.predict(aligned_can)
                     #print(f"DEBUG: Can #{can_id} Score: {score:.8f}")
+                    
+                    acc_infer += infer_timings['total_infer']
+                    acc_clahe += infer_timings['clahe']
+                    acc_resize += infer_timings['resize']
+                    acc_norm += infer_timings['norm']
+                    acc_ov += infer_timings['openvino']
                     
                     can_duration = (time.time() - can_start_time) * 1000
                     
@@ -240,6 +268,31 @@ class InspectionWorker(QThread):
             
             # Capture completion time for accurate total time
             completion_time = time.time()
+            
+            # --- PRINT PERFORMANCE REPORT ---
+            num_cans = len(cans)
+            timings['total_cans'] = (time.time() - t_cans_start) * 1000
+            timings['total_pipeline'] = (completion_time - t_trigger) * 1000
+            
+            print("\n" + "="*50)
+            print(f" PERFORMANCE REPORT ({num_cans} cans) [GUI MODE]")
+            print("="*50)
+            print(f" TOTAL TIME:         {timings['total_pipeline']:.1f} ms  ({timings['total_pipeline']/1000:.2f} s)")
+            print("-" * 50)
+            print(f" 1. Detect Corners:  {timings['detect_corners']:.1f} ms")
+            print(f" 2. Rectify Sheet:   {timings['rectify']:.1f} ms")
+            print(f" 3. Crop Cans:       {timings['crop']:.1f} ms")
+            print("-" * 50)
+            print(f" 4. Processing Loop: {timings['total_cans']:.1f} ms")
+            if num_cans > 0:
+                print(f"    - Avg Per Can:   {timings['total_cans']/num_cans:.1f} ms")
+                print(f"    - Avg Align:     {acc_align/num_cans:.1f} ms")
+                print(f"    - Avg Infer:     {acc_infer/num_cans:.1f} ms")
+                print(f"        * CLAHE:     {acc_clahe/num_cans:.1f} ms")
+                print(f"        * Resize:    {acc_resize/num_cans:.1f} ms")
+                print(f"        * Norm:      {acc_norm/num_cans:.1f} ms")
+                print(f"        * OpenVINO:  {acc_ov/num_cans:.1f} ms")
+            print("="*50 + "\n")
             
             self.finished.emit(qt_image, stats, logs, results_data, rectified, completion_time)
             
