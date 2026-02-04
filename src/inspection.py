@@ -216,12 +216,25 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
                 save_dir = os.path.join("data", "defects", year_dir, month_dir)
                 os.makedirs(save_dir, exist_ok=True)
                 
-                # Re-generate CLAHE for visualization save (slightly inefficient but safe)
-                img_clahe = apply_clahe(aligned_can) if aligner else apply_clahe(can_img)
+                # Re-generate processed image for visualization save using EXACTLY the same pipeline as dataset
+                # This ensures "What you see is what you trained on"
+                # Note: We align first if aligner exists
+                from .can_process_img.nomrmalize_can import prepare_for_autoencoder
+                
+                if aligner:
+                    img_to_save = prepare_for_autoencoder(aligned_can, target_size=(448, 448))
+                else:
+                    # If no aligner, we assume crop is raw, so we might need resize? 
+                    # Dataset pipeline: Raw -> Resize -> Align -> Prepare
+                    # Inspection pipeline: Raw -> Aligner -> Predict
+                    # Here we have 'aligned_can'.
+                    # prepare_for_autoencoder does NOT resize (it assumes 448x448 input roughly or handles color).
+                    # Actually prepare_for_autoencoder takes 'img' and does CLAHE. It doesn't resize.
+                    img_to_save = prepare_for_autoencoder(can_img, target_size=(448, 448))
 
                 timestamp = now.strftime("%Y%m%d_%H%M%S")
                 defect_filename = os.path.join(save_dir, f"NOK_{timestamp}_can{can_id}_score{score:.2f}.png")
-                cv2.imwrite(defect_filename, img_clahe)
+                cv2.imwrite(defect_filename, img_to_save)
 
             # Desenhar na folha
             x1, y1, x2, y2 = bbox
@@ -264,4 +277,4 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
         print(f" ✗ Error: {e}")
         import traceback
         traceback.print_exc()
-```
+

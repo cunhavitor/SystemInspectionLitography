@@ -1707,7 +1707,7 @@ class InspectionWindow(QMainWindow):
             self.video_label.setText(f"Camera Error: {str(e)}")
             self.update_status(f"Error: {str(e)}")
 
-    def update_frame(self, qt_image, sharpness, raw_frame):
+    def update_frame(self, qt_image, sharpness, noise, raw_frame):
         # Update internal frame for capture, but DO NOT update UI (Live View Disabled)
         if self.camera_thread and not self.camera_thread.paused:
             # print("DEBUG: update_frame received") # Too spammy, rely on thread log

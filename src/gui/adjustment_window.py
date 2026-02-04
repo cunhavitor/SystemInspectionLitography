@@ -130,6 +130,16 @@ class AdjustmentWindow(QMainWindow):
         layout_cam.addWidget(self.sharpness_bar)
         layout_cam.addWidget(self.sharpness_value_label)
         
+        # Noise Meter
+        layout_cam.addWidget(QLabel("Digital Noise Level (Lower is Better):"))
+        self.noise_bar = QProgressBar()
+        self.noise_bar.setRange(0, 20) # Typical range 0-10. >20 is very noisy.
+        self.noise_bar.setTextVisible(True)
+        self.noise_bar.setFormat("%v") # Show value
+        self.noise_value_label = QLabel("Noise: 0.0")
+        layout_cam.addWidget(self.noise_bar)
+        layout_cam.addWidget(self.noise_value_label)
+        
         # Camera Params Sliders (Using helper)
         params_group = QGroupBox("Camera Parameters")
         params_layout = QFormLayout()
@@ -796,7 +806,7 @@ class AdjustmentWindow(QMainWindow):
         self.sharpness_bar.setValue(0)
         self.sharpness_value_label.setText("Score: 0.0 (Reset)")
 
-    def update_frame(self, qt_image, sharpness_score, raw_frame):
+    def update_frame(self, qt_image, sharpness_score, noise_score, raw_frame):
         """Called by CameraThread when a new frame is available"""
         # qt_image is now a QImage passed directly from the thread
         if qt_image is not None and not qt_image.isNull():
@@ -837,6 +847,21 @@ class AdjustmentWindow(QMainWindow):
             self.sharpness_value_label.setText(
                 f"Score: {sharpness_score:.1f} / Peak: {self.max_focus_score:.1f}"
             )
+            
+            # 6. Update Noise Meter
+            self.noise_bar.setValue(min(int(noise_score), 20))
+            self.noise_value_label.setText(f"Noise: {noise_score:.2f}")
+            
+            # Color Coding (Low is Good)
+            if noise_score < 3.0:
+                # Green (Excellent)
+                self.noise_bar.setStyleSheet("QProgressBar::chunk { background-color: #4caf50; }")
+            elif noise_score < 8.0:
+                # Yellow (Acceptable)
+                self.noise_bar.setStyleSheet("QProgressBar::chunk { background-color: #ffeb3b; }")
+            else:
+                # Red (High Noise)
+                self.noise_bar.setStyleSheet("QProgressBar::chunk { background-color: #f44336; }")
 
     def run_resize_step(self):
         """Update Resizer params and show preview of first can"""

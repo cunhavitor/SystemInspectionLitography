@@ -15,7 +15,7 @@ class SheetRectifier:
         Args:
             pixels_per_mm: Resolução da imagem de saída (pixels por milímetro)
         """
-    def __init__(self, pixels_per_mm=3.0):
+    def __init__(self, pixels_per_mm=3.7):
         """
         Inicializa o retificador com medidas reais da folha.
         """

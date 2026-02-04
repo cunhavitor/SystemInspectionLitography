@@ -43,9 +43,9 @@ class Camera:
                 # Set initial controls with auto-exposure enabled
                 self.picam.set_controls({
                     "AeEnable": False,  # Enable auto-exposure
-                    "AwbEnable": False,  # Enable auto white balance
                     "Brightness": 0.0,
-                    "Contrast": 1.0
+                    "Contrast": 1.0,
+                    "Sharpness": 1.0
                 })
                 
                 self.picam.start()

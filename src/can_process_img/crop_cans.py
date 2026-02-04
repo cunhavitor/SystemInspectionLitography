@@ -4,7 +4,7 @@ import json
 import os
 
 class CanCropper:
-    def __init__(self, pixels_per_mm=3.0):
+    def __init__(self, pixels_per_mm=3.7):
         """
         Inicializa o cropper com medidas reais das latas.
         """
