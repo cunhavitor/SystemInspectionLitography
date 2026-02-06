@@ -8,6 +8,13 @@ from .can_process_img.rectified_sheet import SheetRectifier
 from .can_process_img.crop_cans import CanCropper
 from .can_process_img.align_can import CanAligner
 from .inference.patchcore_inference_v2 import PatchCoreInferencer
+from .inference.patchcore_inference_v2 import PatchCoreInferencer
+
+
+# Configuration for Model Selection
+# Options: "RD4AD", "PATCHCORE"
+# SELECTED_MODEL = "PATCHCORE" # Deprecated, defaulted to PatchCore
+
 
 
 def apply_clahe(image):
@@ -65,16 +72,17 @@ def run_inspection_mode(config):
             print(f"✓ Can Aligner loaded with reference: {ref_path}")
         except Exception as e:
             print(f"⚠ Failed to load aligner: {e}")
-    else:
-        print(f"⚠ Reference image not found at {ref_path}")
-    
-    # 5. PatchCore Inferencer
+    # Load Model (Always PatchCore now)
     try:
-        # Load PatchCore model (OpenVINO + Bias Map + Coreset automatically handled)
-        inferencer = PatchCoreInferencer()
-        print(f"✓ PatchCore Inferencer loaded. Threshold: {inferencer.threshold}")
+        print(f"Loading PatchCore Model from {model_dir}...")
+        inferencer = PatchCoreInferencer(model_dir=model_dir)
+        inferencer.threshold = 2.0 # Default
     except Exception as e:
-        print(f"✗ Failed to load PatchCore: {e}")
+        print(f"Error loading model: {e}")
+        return
+
+    except Exception as e:
+        print(f"✗ Failed to load {SELECTED_MODEL} model: {e}")
         print("Inspection will not work without model!")
         cam.release()
         return

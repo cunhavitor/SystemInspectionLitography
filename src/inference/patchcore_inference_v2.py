@@ -105,10 +105,10 @@ class PatchCoreInferencer:
         bias_max = np.max(self.bias_map) if self.bias_map is not None else 0
         bias_min = np.min(self.bias_map) if self.bias_map is not None else 0
         
-        #print(f"--- DEBUG ---", flush=True)
-        #print(f"RAW Map Max: {raw_max:.4f}", flush=True)   # Deve ser ~18 a 30
-        #print(f"BIAS Map Max: {bias_max:.4f}", flush=True) # Deve ser ~18 a 22 (perto do raw)
-        #print(f"BIAS Map Min: {bias_min:.4f}", flush=True) # Deve ser > 15
+        print(f"--- DEBUG ---", flush=True)
+        print(f"RAW Map Max: {raw_max:.4f}", flush=True)   # Deve ser ~18 a 30
+        print(f"BIAS Map Max: {bias_max:.4f}", flush=True) # Deve ser ~18 a 22 (perto do raw)
+        print(f"BIAS Map Min: {bias_min:.4f}", flush=True) # Deve ser > 15
         
         if self.bias_map is not None:
              # 1. Garantir que as dimensões batem certo (segurança)
@@ -117,7 +117,7 @@ class PatchCoreInferencer:
                   self.bias_map = cv2.resize(self.bias_map, (raw_map.shape[1], raw_map.shape[0]))
              
              clean_map = np.maximum(raw_map - self.bias_map, 0)
-             # print(f"CLEAN Map Max (Score): {np.max(clean_map):.4f}", flush=True)
+             print(f"CLEAN Map Max (Score): {np.max(clean_map):.4f}", flush=True)
         else:
              clean_map = raw_map
 
