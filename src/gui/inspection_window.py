@@ -843,13 +843,25 @@ class CanDetailDialog(QDialog):
             # Heatmap is likely float 0-1 or similar. Need to normalize and colorize.
             # Assuming heatmap is pre-processed or raw float map.
             try:
-                # Normalize to 0-255
-                hm_norm = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX)
-                hm_uint8 = hm_norm.astype(np.uint8)
-                # Apply colormap (Jet)
-                hm_color = cv2.applyColorMap(hm_uint8, cv2.COLORMAP_JET)
+                # Normalize to 0-255 using fixed ceiling (15.0)
+                teto_maximo = 15.0
+                hm_norm = np.clip(heatmap / teto_maximo * 255, 0, 255).astype(np.uint8)
                 
-                final_display = hm_color
+                # Apply colormap (Jet)
+                hm_color = cv2.applyColorMap(hm_norm, cv2.COLORMAP_JET)
+                
+                # Create overlay if image exists
+                if image is not None:
+                    # Ensure image size matches heatmap
+                    if image.shape[:2] != hm_color.shape[:2]:
+                        bg_img = cv2.resize(image, (hm_color.shape[1], hm_color.shape[0]))
+                    else:
+                        bg_img = image.copy()
+                    
+                    # Blend: 20% Image + 80% Heatmap
+                    final_display = cv2.addWeighted(bg_img, 0.2, hm_color, 0.8, 0)
+                else:
+                    final_display = hm_color
 
                 rgb_hm = cv2.cvtColor(final_display, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_hm.shape

@@ -125,46 +125,33 @@ class PatchCoreInferencer:
 
     def visualize(self, clean_map, bg_image):
         """
-        Gera visualização apenas se necessário.
+        Sobrepõe o mapa de calor na imagem original.
+        Otimizado para velocidade no Raspberry Pi 5.
         """
-        # Normalização fixa para estabilidade visual (0 a 20 de erro)
-        # Assim o vermelho é sempre "erro grave" e azul é "erro leve"
-        heatmap_norm = np.clip(clean_map / 20.0 * 255, 0, 255).astype(np.uint8)
+        # 1. NORMALIZAÇÃO FIXA (O Segredo da Estabilidade)
+        # Em vez de usar o máximo da imagem atual (que faz o ruído brilhar),
+        # usamos um teto fixo. 
+        # - Valores < 4.0 (Threshold) ficarão azuis/cyanos.
+        # - Valores > 10.0 (Defeito) ficarão vermelhos fortes.
+        teto_maximo = 15.0 
+        
+        # Converte 0..15 para 0..255
+        heatmap_norm = np.clip(clean_map / teto_maximo * 255, 0, 255).astype(np.uint8)
+        
+        # 2. COLORMAP (Azul = Frio, Vermelho = Quente)
         heatmap = cv2.applyColorMap(heatmap_norm, cv2.COLORMAP_JET)
         
-        # Custom Blending:
-        # 1. Alpha Map (Starts at score 1.0, max at 10.0)
-        # Low scores (Blue) -> Transparent
-        # High scores (Red) -> Semi-transparent (Max 0.4 opacity)
-        alpha = np.clip((clean_map - 1.0) / 10.0, 0, 0.4)
-        alpha = np.dstack([alpha, alpha, alpha]) # 3 channels
-        
-        # 2. Blend: Use AddWeighted-like logic manually
-        # Result = Bkg * 1.0 + Heatmap * Alpha
-        # This preserves the background brightness better than straight alpha blending
-        overlay = cv2.addWeighted(bg_image, 1.0, heatmap, 0.0, 0) # Start with full image
-        
-        # Apply heatmap only where alpha > 0
-        mask = alpha > 0
-        overlay[mask] = (bg_image[mask].astype(float) * (1 - alpha[mask]) + \
-                         heatmap[mask].astype(float) * alpha[mask]).astype(np.uint8)
+        # 3. REDIMENSIONAR (Segurança)
+        # Garante que o mapa tem o mesmo tamanho da imagem (caso haja diferenças de arredondamento)
+        if heatmap.shape[:2] != bg_image.shape[:2]:
+            heatmap = cv2.resize(heatmap, (bg_image.shape[1], bg_image.shape[0]))
+            
+        # 4. BLENDING (Mistura)
+        # 60% Imagem Original + 40% Mapa de Calor
+        # Isto permite ver o rótulo da lata por baixo do "calor"
+        overlay = cv2.addWeighted(bg_image, 0.6, heatmap, 0.4, 0)
         
         return overlay
-
-    def predict(self, image):
-        """
-        API wrapper for inspection.py compatibility.
-        """
-        score, clean_map, resized_image, timings = self.infer(image)
-        
-        # Generate visualization
-        viz = self.visualize(clean_map, resized_image)
-        
-        # Determine status
-        is_normal = score < self.threshold
-        
-        # Return score as float for compatibility with reverted inspection_window.py
-        return score, is_normal, viz, clean_map, timings
 
 if __name__ == "__main__":
     import sys
