@@ -839,16 +839,19 @@ class CanDetailDialog(QDialog):
         self.lbl_heatmap.setScaledContents(True)
         
         if heatmap is not None:
+            print(f"DEBUG: CanDetailDialog Heatmap Shape: {heatmap.shape}, Min: {np.min(heatmap):.4f}, Max: {np.max(heatmap):.4f}")
             # Heatmap is likely float 0-1 or similar. Need to normalize and colorize.
             # Assuming heatmap is pre-processed or raw float map.
             try:
                 # Normalize to 0-255
                 hm_norm = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX)
                 hm_uint8 = hm_norm.astype(np.uint8)
-                # Apply colormap (Jet or similar)
+                # Apply colormap (Jet)
                 hm_color = cv2.applyColorMap(hm_uint8, cv2.COLORMAP_JET)
                 
-                rgb_hm = cv2.cvtColor(hm_color, cv2.COLOR_BGR2RGB)
+                final_display = hm_color
+
+                rgb_hm = cv2.cvtColor(final_display, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_hm.shape
                 qhm = QImage(rgb_hm.data, w, h, ch * w, QImage.Format_RGB888)
                 self.lbl_heatmap.setPixmap(QPixmap.fromImage(qhm))

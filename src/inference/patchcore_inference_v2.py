@@ -8,195 +8,202 @@ class PatchCoreInferencer:
     def __init__(self, model_dir="models/bpo_rr125_patchcore_v2", device="CPU"):
         self.model_dir = model_dir
         self.device = device
+        # Normalização ImageNet (Igual ao treino)
         self.mean = np.array([0.485, 0.456, 0.406])
         self.std = np.array([0.229, 0.224, 0.225])
-        self.threshold = 10.0 # Default threshold
+        
+        # --- CONFIGURAÇÃO INDUSTRIAL ---
+        self.threshold = 4.0        # Limiar de Rejeição (Ajustado pelos testes)
+        self.noise_gate = 2.0       # Margem de Silêncio (Corta o ruído de fundo)
         
         # Load OpenVINO model
+        print(f"📦 Loading model from {model_dir}...")
         core = ov.Core()
         model_xml = os.path.join(model_dir, "model.xml")
+        
+        if not os.path.exists(model_xml):
+            raise FileNotFoundError(f"Model file not found: {model_xml}")
+
+        # Configuração de Cache para arranque rápido nas próximas vezes
+        core.set_property({'CACHE_DIR': os.path.join(model_dir, 'cache')})
+        
         model = core.read_model(model=model_xml)
         self.compiled_model = core.compile_model(model=model, device_name=device)
         self.input_layer = self.compiled_model.input(0)
         self.output_layer = self.compiled_model.output(0)
         
-        # Load Bias Map
-        bias_path = os.path.join(model_dir, "threshold_map.npy")
+        # Load Bias Map (Threshold Map)
+        # Load Bias Map (Threshold Map)
+        bias_path = os.path.join(model_dir, "threshold_map.npy") # Nome atualizado
+        if not os.path.exists(bias_path):
+             # Fallback to standard name
+             bias_path = os.path.join(model_dir, "threshold_map.npy")
+
         if os.path.exists(bias_path):
             self.bias_map = np.load(bias_path)
-            print(f"Loaded bias map from {bias_path} with shape {self.bias_map.shape}")
+            # Forçar resize inicial para evitar custos na inferência
+            if self.bias_map.shape != (448, 448):
+                 self.bias_map = cv2.resize(self.bias_map, (448, 448))
+            print(f"✅ Loaded bias map: {self.bias_map.shape}")
         else:
-            print(f"WARNING: Bias map not found at {bias_path}. processing without it.")
-            self.bias_map = None
+            print(f"⚠️ WARNING: Bias map not found at {bias_path}. Using flat threshold.")
+            self.bias_map = np.full((448, 448), 15.0, dtype=np.float32)
 
-    def apply_clahe(self, image):
-        """
-        Applies CLAHE to the L channel of the LAB image.
-        """
-        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        cl = clahe.apply(l)
-        limg = cv2.merge((cl, a, b))
-        return cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+        # Kernel de erosão pré-alocado (Otimização de memória)
+        self.erode_kernel = np.ones((3, 3), np.uint8)
 
     def preprocess(self, image):
         """
-        CLAHE -> Resize -> Normalize -> Transpose
-        Returns: input_tensor, resized_image, timings_dict
+        Resize -> Normalize -> Transpose (SEM CLAHE)
         """
         t0 = time.time()
         
-        # 1. Apply CLAHE (Centralized here)
-        image = self.apply_clahe(image)
-        t1 = time.time()
-
-        # 2. Resize to 448x448
-        # If image is already 448x448, resize is no-op or safe
+        # 1. Resize (Se necessário)
         if image.shape[:2] != (448, 448):
             resized = cv2.resize(image, (448, 448))
         else:
-            resized = image.copy()
-        t2 = time.time()
+            resized = image # Referência sem cópia se possível
         
-        # 3. Convert to RGB (OpenCV uses BGR by default)
-        rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        t1 = time.time()
         
-        # 4. Normalize
-        rgb_image = rgb_image.astype(np.float32) / 255.0
-        rgb_image = (rgb_image - self.mean) / self.std
+        # 2. Convert to RGB & Normalize
+        # Truque Numpy: fazer tudo numa operação vetorizada
+        rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32)
+        rgb_image /= 255.0
+        rgb_image -= self.mean
+        rgb_image /= self.std
         
-        # 5. Transpose to [1, 3, 448, 448]
+        # 3. Transpose to [1, 3, 448, 448]
         input_tensor = np.transpose(rgb_image, (2, 0, 1))
         input_tensor = np.expand_dims(input_tensor, axis=0)
-        t3 = time.time()
+        
+        t2 = time.time()
         
         timings = {
-            'clahe': (t1 - t0) * 1000,
-            'resize': (t2 - t1) * 1000,
-            'norm': (t3 - t2) * 1000
+            'resize': (t1 - t0) * 1000,
+            'norm': (t2 - t1) * 1000,
+            'clahe': 0.0 # Kept for compatibility with inspection.py logging
         }
         
         return input_tensor, resized, timings
 
     def infer(self, image):
         """
-        Full inference pipeline.
-        Returns: score, clean_map, anomaly_map_viz, timings
+        Pipeline: Preprocess -> OpenVINO -> Diff -> Erosão -> Score
         """
         start_time = time.time()
         
-        # Preprocess
-        input_tensor, resized_image, pre_timings = self.preprocess(image)
-        t_pre = time.time()
+        # 1. Preprocess
+        input_tensor, resized_image, timings = self.preprocess(image)
         
-        # Inference
+        # 2. Inference
+        t_start_inf = time.time()
         results = self.compiled_model([input_tensor])[self.output_layer]
-        t_infer = time.time()
+        timings['openvino'] = (time.time() - t_start_inf) * 1000
         
-        # Post-process (based on Anomalib output structure usually [1, 1, 448, 448] or similar)
-        # Squeeze to remove batch dim if necessary: [1, H, W] -> [H, W]
+        # 3. Pós-Processamento (A Mágica da Limpeza)
         raw_map = results.squeeze() 
         
-        # Apply Bias Map
-        # Apply Bias Map (Threshold)
-        # DEBUG DIAGNÓSTICO
-        raw_max = np.max(raw_map)
-        bias_max = np.max(self.bias_map) if self.bias_map is not None else 0
-        bias_min = np.min(self.bias_map) if self.bias_map is not None else 0
+        # APLICAR O THRESHOLD MAP + NOISE GATE
+        # Fórmula: Erro = Max(Raw - (Map + 2.0), 0)
+        # Isto garante que o ruído de fundo (ex: 1.4) vira Zero.
+        diff_map = np.maximum(raw_map - (self.bias_map + self.noise_gate), 0)
         
-        print(f"--- DEBUG ---", flush=True)
-        print(f"RAW Map Max: {raw_max:.4f}", flush=True)   # Deve ser ~18 a 30
-        print(f"BIAS Map Max: {bias_max:.4f}", flush=True) # Deve ser ~18 a 22 (perto do raw)
-        print(f"BIAS Map Min: {bias_min:.4f}", flush=True) # Deve ser > 15
-        
-        if self.bias_map is not None:
-             # 1. Garantir que as dimensões batem certo (segurança)
-             if raw_map.shape != self.bias_map.shape:
-                  # Se necessário, faz resize do bias para bater com o raw
-                  self.bias_map = cv2.resize(self.bias_map, (raw_map.shape[1], raw_map.shape[0]))
-             
-             clean_map = np.maximum(raw_map - self.bias_map, 0)
-             print(f"CLEAN Map Max (Score): {np.max(clean_map):.4f}", flush=True)
+        # APLICAR EROSÃO (Remove pixéis isolados/poeira)
+        # Se diff_map for tudo zero, saltamos isto para poupar tempo
+        if np.max(diff_map) > 0:
+            clean_map = cv2.erode(diff_map, self.erode_kernel, iterations=1)
         else:
-             clean_map = raw_map
+            clean_map = diff_map
 
-        # Logic for Anomaly Score
+        # 4. Score Final (Pico Máximo)
         score = np.max(clean_map)
         
-        # Visualization
-        anomaly_map_viz = self.visualize(clean_map, resized_image)
+        timings['total_infer'] = (time.time() - start_time) * 1000
         
-        total_time = (time.time() - start_time) * 1000
-        infer_time = (t_infer - t_pre) * 1000
-        
-        timings = pre_timings
-        timings['openvino'] = infer_time
-        timings['total_infer'] = total_time
-        
-        return score, clean_map, anomaly_map_viz, timings
+        return score, clean_map, resized_image, timings
 
-    def visualize(self, anomaly_map, original_image):
+    def visualize(self, clean_map, bg_image):
         """
-        Overlay heatmap on image.
+        Gera visualização apenas se necessário.
         """
-        # Normalize anomaly map to 0-255 for visualization
-        # We need a robust normalization. 
-        # For visualization, we often want to map [0, max] -> [0, 255] or [0, threshold*factor]
+        # Normalização fixa para estabilidade visual (0 a 20 de erro)
+        # Assim o vermelho é sempre "erro grave" e azul é "erro leve"
+        heatmap_norm = np.clip(clean_map / 20.0 * 255, 0, 255).astype(np.uint8)
+        heatmap = cv2.applyColorMap(heatmap_norm, cv2.COLORMAP_JET)
         
-        # Simple min-max normalization for viz
-        am_min = np.min(anomaly_map)
-        am_max = np.max(anomaly_map)
+        # Custom Blending:
+        # 1. Alpha Map (Starts at score 1.0, max at 10.0)
+        # Low scores (Blue) -> Transparent
+        # High scores (Red) -> Semi-transparent (Max 0.4 opacity)
+        alpha = np.clip((clean_map - 1.0) / 10.0, 0, 0.4)
+        alpha = np.dstack([alpha, alpha, alpha]) # 3 channels
         
-        if am_max - am_min > 0:
-            am_norm = (anomaly_map - am_min) / (am_max - am_min)
-        else:
-            am_norm = np.zeros_like(anomaly_map)
-            
-        am_norm = (am_norm * 255).astype(np.uint8)
+        # 2. Blend: Use AddWeighted-like logic manually
+        # Result = Bkg * 1.0 + Heatmap * Alpha
+        # This preserves the background brightness better than straight alpha blending
+        overlay = cv2.addWeighted(bg_image, 1.0, heatmap, 0.0, 0) # Start with full image
         
-        # Apply colormap
-        heatmap = cv2.applyColorMap(am_norm, cv2.COLORMAP_JET)
-        
-        # Resize heatmap to match original image (if not already 448x448, but here it is)
-        if heatmap.shape[:2] != original_image.shape[:2]:
-            heatmap = cv2.resize(heatmap, (original_image.shape[1], original_image.shape[0]))
-            
-        # Superimpose
-        overlay = cv2.addWeighted(original_image, 0.6, heatmap, 0.4, 0)
+        # Apply heatmap only where alpha > 0
+        mask = alpha > 0
+        overlay[mask] = (bg_image[mask].astype(float) * (1 - alpha[mask]) + \
+                         heatmap[mask].astype(float) * alpha[mask]).astype(np.uint8)
         
         return overlay
-
 
     def predict(self, image):
         """
         API wrapper for inspection.py compatibility.
         """
-        score, clean_map, viz, timings = self.infer(image)
-        # Usar o threshold configurado dinamicamente
+        score, clean_map, resized_image, timings = self.infer(image)
+        
+        # Generate visualization
+        viz = self.visualize(clean_map, resized_image)
+        
+        # Determine status
         is_normal = score < self.threshold
+        
+        # Return score as float for compatibility with reverted inspection_window.py
         return score, is_normal, viz, clean_map, timings
 
 if __name__ == "__main__":
-    # Test block
     import sys
     
+    # Caminho do modelo (ajusta se necessário)
+    model_path = "models/bpo_rr125_patchcore_v2" 
+    
     if len(sys.argv) < 2:
-        print("Usage: python patchcore_inference_v2.py <image_path>")
-    else:
-        img_path = sys.argv[1]
+        print(f"Usage: python infer.py <image_path>")
+        sys.exit(1)
         
-        if not os.path.exists(img_path):
-            print(f"Image {img_path} not found.")
-            sys.exit(1)
-            
-        img = cv2.imread(img_path)
-        inferencer = PatchCoreInferencer()
-        score, _, viz = inferencer.infer(img)
+    img_path = sys.argv[1]
+    if not os.path.exists(img_path):
+        print("Image not found")
+        sys.exit(1)
         
-        print(f"Anomaly Score: {score:.4f}")
-        result = "ANOMALY" if score > 0.5 else "NORMAL"
-        print(f"Result: {result}")
-        
-        cv2.imwrite("output_viz.jpg", viz)
-        print("Saved visualization to output_viz.jpg")
+    inferencer = PatchCoreInferencer(model_dir=model_path)
+    
+    # Warmup (Importante no Pi!)
+    print("🔥 Warming up...", end="", flush=True)
+    dummy = np.zeros((448,448,3), dtype=np.uint8)
+    inferencer.infer(dummy)
+    print(" Done.")
+
+    # Inferência Real
+    img = cv2.imread(img_path)
+    score, amap, rez, times = inferencer.infer(img)
+    
+    print(f"\n⏱️  TIMINGS (ms):")
+    print(f"Resize/Norm: {times['resize']+times['norm']:.2f}")
+    print(f"OpenVINO:    {times['openvino']:.2f}")
+    print(f"Total:       {times['total']:.2f}")
+    
+    print(f"\n📊 RESULTADO:")
+    print(f"Score: {score:.4f}")
+    status = "REJEITADO ❌" if score > inferencer.threshold else "APROVADO ✅"
+    print(f"Status: {status}")
+    
+    # Salvar visualização
+    viz = inferencer.visualize(amap, rez)
+    cv2.imwrite("resultado_pi.jpg", viz)
+    print("Visualização salva em 'resultado_pi.jpg'")
