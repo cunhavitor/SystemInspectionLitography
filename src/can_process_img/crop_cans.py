@@ -4,23 +4,21 @@ import json
 import os
 
 class CanCropper:
-    def __init__(self, pixels_per_mm=3.0):
+    def __init__(self, pixels_per_mm=3.82):
         """
         Inicializa o cropper com medidas reais das latas.
         """
         self.pixels_per_mm = pixels_per_mm
         
         # Default Medidas em milímetros
-        self.first_can_center_x_mm = 61.04
-        self.first_can_center_y_mm = 70.05
+        self.first_can_center_x_mm = 61.32  # Updated per user feedback
+        self.first_can_center_y_mm = 79.05  # Updated per user feedback
         self.can_width_mm = 119.47
         self.can_height_mm = 156.0
         self.step_x_mm = 120.52
         self.step_y_mm = 132.16
         self.tolerance_box_mm = 10.0
         self.sheet_margin_mm = 30.0  # Margem adicionada na folha retificada
-        self.margin_top_bottom_mm = 10.05
-        self.margin_left_right_mm = 1.59
         
         self.rows = 6
         self.cols = 8
@@ -30,15 +28,29 @@ class CanCropper:
 
     def update_pixel_values(self):
         """Recalculate pixel values based on current mm parameters"""
+        # Determine X and Y scales
+        if isinstance(self.pixels_per_mm, tuple):
+             px_x, px_y = self.pixels_per_mm
+        else:
+             px_x = px_y = self.pixels_per_mm
+
         # Converter para pixels
         # Adicionamos sheet_margin_mm às coordenadas iniciais porque a imagem shiftou (30mm, 30mm)
-        self.first_can_center_x = int((self.first_can_center_x_mm + self.margin_left_right_mm + self.sheet_margin_mm) * self.pixels_per_mm)
-        self.first_can_center_y = int((self.first_can_center_y_mm + self.margin_top_bottom_mm + self.sheet_margin_mm) * self.pixels_per_mm)
-        self.can_width = int(self.can_width_mm * self.pixels_per_mm)
-        self.can_height = int(self.can_height_mm * self.pixels_per_mm)
-        self.step_x = int(self.step_x_mm * self.pixels_per_mm)
-        self.step_y = int(self.step_y_mm * self.pixels_per_mm)
-        self.tolerance_box = int(self.tolerance_box_mm * self.pixels_per_mm)
+        # NOTA: sheet_margin_mm é aplicado com SCALE Y no Rectifier, mas o X offset deve usar Scale X?
+        # No Rectifier: margin_px = int(self.margin_mm * px_per_mm_y) <- Margin is uniform based on Y scale
+        # Então o offset em X é (margin_mm * px_y) e em Y é (margin_mm * px_y).
+        margin_px_x = int(self.sheet_margin_mm * px_y) # Margin is uniform Y-based
+        margin_px_y = int(self.sheet_margin_mm * px_y) # Margin is uniform Y-based
+        
+        self.first_can_center_x = int(self.first_can_center_x_mm * px_x) + margin_px_x
+        self.first_can_center_y = int(self.first_can_center_y_mm * px_y) + margin_px_y
+        
+        self.can_width = int(self.can_width_mm * px_x)
+        self.can_height = int(self.can_height_mm * px_y)
+        self.step_x = int(self.step_x_mm * px_x)
+        self.step_y = int(self.step_y_mm * px_y)
+        self.tolerance_box = int(self.tolerance_box_mm * px_x) # Use X scale for tolerance box width usually
+
 
     def load_params(self, filepath='config/crop_params.json'):
         """Load parameters from JSON"""
@@ -51,8 +63,6 @@ class CanCropper:
                     self.step_x_mm = params.get('step_x_mm', self.step_x_mm)
                     self.step_y_mm = params.get('step_y_mm', self.step_y_mm)
                     self.tolerance_box_mm = params.get('tolerance_box_mm', self.tolerance_box_mm)
-                    self.margin_left_right_mm = params.get('margin_left_right_mm', self.margin_left_right_mm)
-                    self.margin_top_bottom_mm = params.get('margin_top_bottom_mm', self.margin_top_bottom_mm)
                     
                     self.update_pixel_values()
                 print(f"Crop params loaded from {filepath}")
@@ -71,9 +81,7 @@ class CanCropper:
                 'first_can_center_y_mm': self.first_can_center_y_mm,
                 'step_x_mm': self.step_x_mm,
                 'step_y_mm': self.step_y_mm,
-                'tolerance_box_mm': self.tolerance_box_mm,
-                'margin_left_right_mm': self.margin_left_right_mm,
-                'margin_top_bottom_mm': self.margin_top_bottom_mm
+                'tolerance_box_mm': self.tolerance_box_mm
             }
             with open(filepath, 'w') as f:
                 json.dump(params, f, indent=4)
@@ -85,15 +93,21 @@ class CanCropper:
     
 
 
-    def crop_cans(self, rectified_image):
+    def crop_cans(self, rectified_image, pixels_per_mm=None):
         """
         Extrai todas as latas da imagem retificada usando padrão zigzag.
         Args:
             rectified_image: Imagem retificada do SheetRectifier
+            pixels_per_mm: Escala dinâmica calculada pelo SheetRectifier
             
         Returns:
             Lista de dicionários: [{'id': int, 'image': np.array, 'bbox': (x1,y1,x2,y2)}]
         """
+        # Se recebermos uma escala nova (dinâmica), atualizamos os valores internos
+        if pixels_per_mm is not None:
+            self.pixels_per_mm = pixels_per_mm
+            self.update_pixel_values()
+            
         cans = []
         
         for row in range(self.rows):
@@ -126,36 +140,42 @@ class CanCropper:
                 
                 # Garantir que não saímos dos limites da imagem
                 h, w = rectified_image.shape[:2]
-                x1 = max(0, x1)
-                y1 = max(0, y1)
-                x2 = min(w, x2)
-                y2 = min(h, y2)
+                x1 = max(0, int(x1))
+                y1 = max(0, int(y1))
+                x2 = min(w, int(x2))
+                y2 = min(h, int(y2))
                 
                 # Extrair a lata
-                can_image = rectified_image[y1:y2, x1:x2]
-                
-                # Calcular ID (1-based)
-                can_id = row * self.cols + col + 1
-                
-                cans.append({
-                    'id': can_id,
-                    'image': can_image,
-                    'bbox': (x1, y1, x2, y2)
-                })
+                if x2 > x1 and y2 > y1:
+                    can_image = rectified_image[y1:y2, x1:x2]
+                    
+                    # Calcular ID (1-based)
+                    can_id = row * self.cols + col + 1
+                    
+                    cans.append({
+                        'id': can_id,
+                        'image': can_image,
+                        'bbox': (x1, y1, x2, y2)
+                    })
         
         return cans
     
-    def draw_grid_preview(self, rectified_image):
+    def draw_grid_preview(self, rectified_image, pixels_per_mm=None):
         """
         Desenha uma visualização do grid de latas sobre a imagem retificada.
         Útil para verificar se as posições estão corretas.
         
         Args:
             rectified_image: Imagem retificada
+            pixels_per_mm: Escala dinâmica (opcional)
             
         Returns:
             Imagem com o grid desenhado
         """
+        if pixels_per_mm is not None:
+             self.pixels_per_mm = pixels_per_mm
+             self.update_pixel_values()
+
         preview = rectified_image.copy()
         
         for row in range(self.rows):

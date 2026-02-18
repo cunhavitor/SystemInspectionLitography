@@ -1,9 +1,9 @@
 {
     "roi_size": 163,
-    "margin_top": 126,
+    "margin_top": 153,
     "margin_bottom": 122,
     "margin_left": 250,
-    "margin_right": 449,
+    "margin_right": 476,
     "dist_TL_BL": 226,
     "dist_TR_BR": 170
 }

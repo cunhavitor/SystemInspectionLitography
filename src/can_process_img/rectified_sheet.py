@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 class SheetRectifier:
-    def __init__(self, pixels_per_mm=3.0):
+    def __init__(self, pixels_per_mm=3.82):
         """
         Inicializa o retificador com medidas reais da folha.
         
@@ -15,12 +15,12 @@ class SheetRectifier:
         Args:
             pixels_per_mm: Resolução da imagem de saída (pixels por milímetro)
         """
-    def __init__(self, pixels_per_mm=3.0):
+    def __init__(self, pixels_per_mm=3.82):
         """
         Inicializa o retificador com medidas reais da folha.
         """
         # Medidas reais em milímetros
-        self.sheet_width_mm = 966.0
+        self.sheet_width_mm = 1026.54
         self.sheet_height_mm = 819.0
         self.sheet_skew_mm = 60.54  # Offset horizontal de TL para BL
         self.margin_mm = 30.0       # Margem extra em toda a volta
@@ -38,33 +38,72 @@ class SheetRectifier:
     def get_warped(self, image, corners):
         """
         Aplica transformação de perspectiva para retificar a folha.
+        Calcula pixels_per_mm dinamicamente com base na largura detetada (TL-TR).
         """
+        # Calcular largura em pixels na imagem original (Distância Euclidiana entre TL e TR)
+        # corners shape: (4, 2) -> TL, TR, BR, BL
+        tl, tr, br, bl = corners[0], corners[1], corners[2], corners[3]
+        
+        # Calculate raw dimensions from source detection
+        width_px_src_top = np.linalg.norm(tr - tl)
+        width_px_src_bot = np.linalg.norm(br - bl)
+        avg_width_px = (width_px_src_top + width_px_src_bot) / 2.0
+        
+        height_px_src_left = np.linalg.norm(bl - tl)
+        height_px_src_right = np.linalg.norm(br - tr)
+        avg_height_px = (height_px_src_left + height_px_src_right) / 2.0
+        
+        # Calculate scales independently
+        px_per_mm_x = avg_width_px / self.sheet_width_mm
+        
+        # LOGIC CHANGE: Y-Scale Correction for Parallelogram Skew
+        # The detected height (avg_height_px) corresponds to the SLANTED edge (hypotenuse).
+        # We must divide by the slanted physical length, not vertical height.
+        physical_slant_height_mm = np.sqrt(self.sheet_height_mm**2 + self.sheet_skew_mm**2)
+        px_per_mm_y = avg_height_px / physical_slant_height_mm
+        
+        print(f"[Rectifier] Scale X (Width): {px_per_mm_x:.4f} px/mm")
+        print(f"[Rectifier] Slant Height mm: {physical_slant_height_mm:.2f}")
+        print(f"[Rectifier] Scale Y (Edge): {px_per_mm_y:.4f} px/mm")
+        
+        # LOGIC CHANGE: Implement Anisotropic Scaling to fix X vs Y drift
+        # User confirmed Y steps are correct with Y-based scale, but X steps are wrong.
+        # This implies the effective scale in X is different from Y.
+        
+        # Recalculate destination dimensions using SEPARATE scales
+        width_px = int(self.sheet_width_mm * px_per_mm_x)
+        height_px = int(self.sheet_height_mm * px_per_mm_y)
+        
+        # For parameters that are primarily horizontal (skew), use X scale
+        skew_px = int(self.sheet_skew_mm * px_per_mm_x)
+        
+        # Default margin uses Y scale for safety (or average), but let's use Y as it's the "trusted" axis
+        margin_px = int(self.margin_mm * px_per_mm_y)
+        
         # Construir pontos de destino como PARALLELOGRAMO com MARGEM
-        # O usuario confirmou que existe um skew fisico de 'sheet_skew_mm' entre TL e BL.
         # TL -> (margin, margin)
         # TR -> (margin + width, margin)
-        # BR -> (margin + width + skew, margin + height)  <-- Skew Restored
-        # BL -> (margin + skew, margin + height)          <-- Skew Restored
+        # BR -> (margin + width + skew, margin + height)
+        # BL -> (margin + skew, margin + height)
         
         dst = np.array([
-            [self.margin_px, self.margin_px],                                          # TL
-            [self.margin_px + self.width_px, self.margin_px],                          # TR
-            [self.margin_px + self.width_px + self.skew_px, self.margin_px + self.height_px],  # BR
-            [self.margin_px + self.skew_px, self.margin_px + self.height_px]           # BL
+            [margin_px, margin_px],                                          # TL
+            [margin_px + width_px, margin_px],                          # TR
+            [margin_px + width_px + skew_px, margin_px + height_px],  # BR
+            [margin_px + skew_px, margin_px + height_px]           # BL
         ], dtype="float32")
         
         # Aplicar transformação de perspectiva
         M = cv2.getPerspectiveTransform(corners, dst)
         
-        # Dimensões da imagem de saída (folha + margens em ambos os lados)
-        # Largura = margem_esq + skew + largura + margem_dir
-        # Altura = margem_top + altura + margem_bottom
-        output_width = self.margin_px + self.skew_px + self.width_px + self.margin_px
-        output_height = self.margin_px + self.height_px + self.margin_px
+        # Dimensões da imagem de saída
+        output_width = margin_px + skew_px + width_px + margin_px
+        output_height = margin_px + height_px + margin_px
         
         warped = cv2.warpPerspective(image, M, (output_width, output_height))
         
-        return warped
+        # Return tuple of scales for X and Y
+        return warped, (px_per_mm_x, px_per_mm_y)
 
     def load_params(self, filepath='config/rect_params.json'):
         """Load parameters from JSON"""
@@ -107,15 +146,15 @@ class SheetRectifier:
             print(f"Error saving rect params: {e}")
             return False
 
-    def crop_cans(self, rectified_image, rows=6, cols=8):
-        h, w = rectified_image.shape[:2]
-        h_step = h // rows
-        w_step = w // cols
-        
-        cans = []
-        for r in range(rows):
-            for c in range(cols):
-                y1, y2 = r * h_step, (r + 1) * h_step
-                x1, x2 = c * w_step, (c + 1) * w_step
-                cans.append(rectified_image[y1:y2, x1:x2])
-        return cans
+    def rectify(self, image, corners):
+        """
+        Wrapper principal para retificação.
+        Returns:
+            warped: Imagem retificada
+            pixels_per_mm: Escala calculada (pixels/mm)
+        """
+        if corners is None or len(corners) != 4:
+            return None, None
+            
+        warped, pixels_per_mm = self.get_warped(image, corners)
+        return warped, pixels_per_mm

@@ -48,6 +48,7 @@ class AdjustmentWindow(QMainWindow):
         self.wiz_state = {
             'corners': None,
             'rectified': None,
+            'pixels_per_mm': None,
             'cans': [],
             'resized': [],
             'aligned': []
@@ -628,7 +629,8 @@ class AdjustmentWindow(QMainWindow):
             
             # Extract cans now
             try:
-                self.wiz_state['cans'] = self.cropper.crop_cans(self.wiz_state['rectified'])
+                pix_mm = self.wiz_state.get('pixels_per_mm', None)
+                self.wiz_state['cans'] = self.cropper.crop_cans(self.wiz_state['rectified'], pixels_per_mm=pix_mm)
                 self.status_bar.showMessage(f"Extracted {len(self.wiz_state['cans'])} cans", 2000)
                 self.run_resize_step() # Show first one
             except Exception as e:
@@ -672,14 +674,20 @@ class AdjustmentWindow(QMainWindow):
                 print(f"DEBUG: Frame shape: {self.current_frozen_frame.shape}")
                 print(f"DEBUG: Corners: {self.wiz_state['corners']}")
                 
-                self.wiz_state['rectified'] = self.rectifier.get_warped(
+                self.wiz_state['rectified'], self.wiz_state['pixels_per_mm'] = self.rectifier.get_warped(
                     self.current_frozen_frame, 
                     self.wiz_state['corners']
                 )
                 
                 if self.wiz_state['rectified'] is not None:
                     h, w = self.wiz_state['rectified'].shape[:2]
-                    print(f"DEBUG: Rectified Image Shape: {w}x{h}")
+                    scale = self.wiz_state['pixels_per_mm']
+                    if isinstance(scale, tuple):
+                        sx, sy = scale
+                        print(f"DEBUG: Rectified Image Shape: {w}x{h}, Scale X: {sx:.2f}, Scale Y: {sy:.2f}")
+                    else:
+                        print(f"DEBUG: Rectified Image Shape: {w}x{h}, Scale: {scale:.2f} px/mm")
+                    
                     self.display_image(self.wiz_state['rectified'])
                     self.status_bar.showMessage(f"Rectification Applied ({w}x{h})", 2000)
                 else:
@@ -706,11 +714,12 @@ class AdjustmentWindow(QMainWindow):
             if self.current_frozen_frame is not None:
                 corners = self.detector.detect(self.current_frozen_frame)
                 if corners is not None:
-                    self.wiz_state['rectified'] = self.rectifier.get_warped(self.current_frozen_frame, corners)
+                    self.wiz_state['rectified'], self.wiz_state['pixels_per_mm'] = self.rectifier.get_warped(self.current_frozen_frame, corners)
             
         if self.wiz_state['rectified'] is not None:
             preview_frame = self.wiz_state['rectified'].copy()
-            preview_frame = self.cropper.draw_grid_preview(preview_frame)
+            pix_mm = self.wiz_state.get('pixels_per_mm', None)
+            preview_frame = self.cropper.draw_grid_preview(preview_frame, pixels_per_mm=pix_mm)
             self.display_image(preview_frame)
 
     def display_image(self, frame):

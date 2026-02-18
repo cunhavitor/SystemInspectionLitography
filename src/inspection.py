@@ -139,17 +139,23 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
         # Step 2: Rectify Sheet
         print("  [2/5] Rectifying Sheet...")
         t0 = time.time()
-        rectified = rectifier.rectify(frame, corners)
+        rectified, pixels_per_mm = rectifier.rectify(frame, corners)
         timings['rectify'] = (time.time() - t0) * 1000
         
         if rectified is None:
              print(" ⚠ Rectification failed.")
              return
+             
+        # Debug dynamic scale
+        if isinstance(pixels_per_mm, tuple):
+             print(f"  [2.1] Dynamic Scale: X={pixels_per_mm[0]:.2f}, Y={pixels_per_mm[1]:.2f} px/mm")
+        else:
+             print(f"  [2.1] Dynamic Scale: {pixels_per_mm:.2f} px/mm")
 
         # Step 3: Crop Cans
         print(f"  [3/5] Cropping Cans...")
         t0 = time.time()
-        cans = cropper.crop(rectified)
+        cans = cropper.crop(rectified, pixels_per_mm=pixels_per_mm)
         timings['crop'] = (time.time() - t0) * 1000
 
         if not cans:
@@ -264,4 +270,3 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
         print(f" ✗ Error: {e}")
         import traceback
         traceback.print_exc()
-```

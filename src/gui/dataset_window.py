@@ -445,14 +445,14 @@ class DatasetWindow(QMainWindow):
         # Step 2: Rectify sheet
         self.log("📐 Step 2/6: Rectifying sheet...")
         
-        rectified = self.rectifier.get_warped(frame, corners)
+        rectified, px_per_mm = self.rectifier.get_warped(frame, corners)
         if rectified is None:
             raise Exception("Rectification failed")
         
         # Step 3: Crop cans
         self.log("✂️ Step 3/6: Cropping cans...")
         
-        cans = self.cropper.crop_cans(rectified)
+        cans = self.cropper.crop_cans(rectified, px_per_mm)
         if not cans:
             raise Exception("No cans detected in rectified sheet")
         

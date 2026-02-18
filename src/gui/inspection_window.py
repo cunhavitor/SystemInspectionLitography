@@ -87,7 +87,7 @@ class InspectionWorker(QThread):
             # --- Step 2: Rectify Sheet ---
             self.progress.emit("Rectifying Sheet...")
             t0 = time.time()
-            rectified = self.rectifier.get_warped(check_img, corners)
+            rectified, pixels_per_mm = self.rectifier.get_warped(check_img, corners)
             timings['rectify'] = (time.time() - t0) * 1000
             if rectified is None:
                 self.error.emit("Rectification Failed")
@@ -96,7 +96,7 @@ class InspectionWorker(QThread):
             # --- Step 3: Crop Cans ---
             self.progress.emit("Cropping Cans...")
             t0 = time.time()
-            cans = self.cropper.crop_cans(rectified)
+            cans = self.cropper.crop_cans(rectified, pixels_per_mm=pixels_per_mm)
             timings['crop'] = (time.time() - t0) * 1000
             if not cans:
                 self.error.emit("No cans detected")
@@ -1013,7 +1013,7 @@ class InspectionWindow(QMainWindow):
         """
         # Map SKU to model directory
         sku_model_map = {
-            'Bom Petisco Oleo - rr125': 'models/bpo_rr125_patchcore_v2',
+            'Bom Petisco Oleo - rr125': 'models/bpo_rr125_patchcore_resnet50',
             'Bom Petisco Azeite - rr125': 'models/bpAz_rr125_patchcore_v2'
         }
         
@@ -1028,7 +1028,7 @@ class InspectionWindow(QMainWindow):
         
         if model_dir is None:
             print(f"WARNING: Unknown SKU '{sku}'. Using default model.")
-            model_dir = 'models/bpo_rr125_patchcore_v2'
+            model_dir = 'models/bpo_rr125_patchcore_resnet50'
             ref_path = 'models/can_reference/aligned_can_reference448_bpo-rr125.png'
         
         if not os.path.exists(model_dir):
