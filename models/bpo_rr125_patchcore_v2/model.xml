@@ -1792,10 +1792,10 @@
 			</output>
 		</layer>
 		<layer id="96" name="node_cat_2_compressed" type="Const" version="opset1">
-			<data element_type="f16" shape="120422, 130" offset="1468890" size="31309720" />
+			<data element_type="f16" shape="90316, 130" offset="1468890" size="23482160" />
 			<output>
 				<port id="0" precision="FP16" names="cat_2">
-					<dim>120422</dim>
+					<dim>90316</dim>
 					<dim>130</dim>
 				</port>
 			</output>
@@ -1807,13 +1807,13 @@
 			</rt_info>
 			<input>
 				<port id="0" precision="FP16">
-					<dim>120422</dim>
+					<dim>90316</dim>
 					<dim>130</dim>
 				</port>
 			</input>
 			<output>
 				<port id="1" precision="FP32">
-					<dim>120422</dim>
+					<dim>90316</dim>
 					<dim>130</dim>
 				</port>
 			</output>
@@ -1826,14 +1826,14 @@
 					<dim>130</dim>
 				</port>
 				<port id="1" precision="FP32">
-					<dim>120422</dim>
+					<dim>90316</dim>
 					<dim>130</dim>
 				</port>
 			</input>
 			<output>
 				<port id="2" precision="FP32" names="matmul_1">
 					<dim>3136</dim>
-					<dim>120422</dim>
+					<dim>90316</dim>
 				</port>
 			</output>
 		</layer>
@@ -1842,13 +1842,13 @@
 			<input>
 				<port id="0" precision="FP32">
 					<dim>3136</dim>
-					<dim>120422</dim>
+					<dim>90316</dim>
 				</port>
 			</input>
 			<output>
 				<port id="1" precision="FP32" names="clamp_min">
 					<dim>3136</dim>
-					<dim>120422</dim>
+					<dim>90316</dim>
 				</port>
 			</output>
 		</layer>
@@ -1856,18 +1856,18 @@
 			<input>
 				<port id="0" precision="FP32">
 					<dim>3136</dim>
-					<dim>120422</dim>
+					<dim>90316</dim>
 				</port>
 			</input>
 			<output>
 				<port id="1" precision="FP32" names="sqrt">
 					<dim>3136</dim>
-					<dim>120422</dim>
+					<dim>90316</dim>
 				</port>
 			</output>
 		</layer>
 		<layer id="101" name="val_149" type="Const" version="opset1">
-			<data element_type="i64" shape="1" offset="32778610" size="8" />
+			<data element_type="i64" shape="1" offset="24951050" size="8" />
 			<output>
 				<port id="0" precision="I64" names="val_149">
 					<dim>1</dim>
@@ -1879,7 +1879,7 @@
 			<input>
 				<port id="0" precision="FP32">
 					<dim>3136</dim>
-					<dim>120422</dim>
+					<dim>90316</dim>
 				</port>
 				<port id="1" precision="I64">
 					<dim>1</dim>
@@ -1892,7 +1892,7 @@
 			</output>
 		</layer>
 		<layer id="103" name="val_155" type="Const" version="opset1">
-			<data element_type="i64" shape="4" offset="32778618" size="32" />
+			<data element_type="i64" shape="4" offset="24951058" size="32" />
 			<rt_info>
 				<attribute name="precise" version="0" />
 			</rt_info>
@@ -1922,7 +1922,7 @@
 			</output>
 		</layer>
 		<layer id="105" name="val_159" type="Const" version="opset1">
-			<data element_type="i64" shape="4" offset="32778650" size="32" />
+			<data element_type="i64" shape="4" offset="24951090" size="32" />
 			<rt_info>
 				<attribute name="precise" version="0" />
 			</rt_info>

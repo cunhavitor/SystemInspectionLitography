@@ -8,6 +8,13 @@ from .can_process_img.rectified_sheet import SheetRectifier
 from .can_process_img.crop_cans import CanCropper
 from .can_process_img.align_can import CanAligner
 from .inference.patchcore_inference_v2 import PatchCoreInferencer
+from .inference.patchcore_inference_v2 import PatchCoreInferencer
+
+
+# Configuration for Model Selection
+# Options: "RD4AD", "PATCHCORE"
+# SELECTED_MODEL = "PATCHCORE" # Deprecated, defaulted to PatchCore
+
 
 
 def apply_clahe(image):
@@ -65,16 +72,17 @@ def run_inspection_mode(config):
             print(f"✓ Can Aligner loaded with reference: {ref_path}")
         except Exception as e:
             print(f"⚠ Failed to load aligner: {e}")
-    else:
-        print(f"⚠ Reference image not found at {ref_path}")
-    
-    # 5. PatchCore Inferencer
+    # Load Model (Always PatchCore now)
     try:
-        # Load PatchCore model (OpenVINO + Bias Map + Coreset automatically handled)
-        inferencer = PatchCoreInferencer()
-        print(f"✓ PatchCore Inferencer loaded. Threshold: {inferencer.threshold}")
+        print(f"Loading PatchCore Model from {model_dir}...")
+        inferencer = PatchCoreInferencer(model_dir=model_dir)
+        inferencer.threshold = 2.0 # Default
     except Exception as e:
-        print(f"✗ Failed to load PatchCore: {e}")
+        print(f"Error loading model: {e}")
+        return
+
+    except Exception as e:
+        print(f"✗ Failed to load {SELECTED_MODEL} model: {e}")
         print("Inspection will not work without model!")
         cam.release()
         return
@@ -222,12 +230,25 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
                 save_dir = os.path.join("data", "defects", year_dir, month_dir)
                 os.makedirs(save_dir, exist_ok=True)
                 
-                # Re-generate CLAHE for visualization save (slightly inefficient but safe)
-                img_clahe = apply_clahe(aligned_can) if aligner else apply_clahe(can_img)
+                # Re-generate processed image for visualization save using EXACTLY the same pipeline as dataset
+                # This ensures "What you see is what you trained on"
+                # Note: We align first if aligner exists
+                from .can_process_img.nomrmalize_can import prepare_for_autoencoder
+                
+                if aligner:
+                    img_to_save = prepare_for_autoencoder(aligned_can, target_size=(448, 448))
+                else:
+                    # If no aligner, we assume crop is raw, so we might need resize? 
+                    # Dataset pipeline: Raw -> Resize -> Align -> Prepare
+                    # Inspection pipeline: Raw -> Aligner -> Predict
+                    # Here we have 'aligned_can'.
+                    # prepare_for_autoencoder does NOT resize (it assumes 448x448 input roughly or handles color).
+                    # Actually prepare_for_autoencoder takes 'img' and does CLAHE. It doesn't resize.
+                    img_to_save = prepare_for_autoencoder(can_img, target_size=(448, 448))
 
                 timestamp = now.strftime("%Y%m%d_%H%M%S")
                 defect_filename = os.path.join(save_dir, f"NOK_{timestamp}_can{can_id}_score{score:.2f}.png")
-                cv2.imwrite(defect_filename, img_clahe)
+                cv2.imwrite(defect_filename, img_to_save)
 
             # Desenhar na folha
             x1, y1, x2, y2 = bbox
@@ -270,3 +291,4 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
         print(f" ✗ Error: {e}")
         import traceback
         traceback.print_exc()
+

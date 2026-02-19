@@ -5,226 +5,246 @@ import os
 import time
 
 class PatchCoreInferencer:
-    def __init__(self, 
-                 model_dir="models/bpo_rr125_patchcore_v2", 
-                 device="CPU",
-                 use_imagenet_norm=True, # Argument kept for compatibility, but logic is fixed as per prompt
-                 normalize_scores=True, # Argument kept for compatibility
-                 **kwargs):
-        
-        # Determine model path
-        # If model_dir points to a file (xml), use it. If dir, append model.xml
-        if model_dir.endswith('.xml'):
-            self.model_xml = model_dir
-            self.model_dir = os.path.dirname(model_dir)
-        else:
-            self.model_dir = model_dir
-            self.model_xml = os.path.join(model_dir, "model.xml")
-            
+    def __init__(self, model_dir="models/bpo_rr125_patchcore_resnet50", device="CPU"):
+        self.model_dir = model_dir
         self.device = device
-        self.threshold = 0.5 # Default as requested
+        # Normalização ImageNet (Igual ao treino)
+        self.mean = np.array([0.485, 0.456, 0.406])
+        self.std = np.array([0.229, 0.224, 0.225])
         
-        # Hardcoded params as per prompt
-        self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-        self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-        self.input_size = (448, 448)
-
-        print(f"Initializing PatchCoreInferencer from {self.model_dir}...")
-
+        # --- CONFIGURAÇÃO INDUSTRIAL ---
+        self.threshold = 4.0        # Limiar de Rejeição (Ajustado pelos testes)
+        self.noise_gate = 2.0       # Margem de Silêncio (Corta o ruído de fundo)
+        
         # Load OpenVINO model
-        if not os.path.exists(self.model_xml):
-            # Fallback to discover if existing code used different path
-            # But we are instructed to use specific model. 
-            print(f"Warning: {self.model_xml} not found. Checking absolute path...")
+        print(f"📦 Loading model from {model_dir}...")
+        core = ov.Core()
+        model_xml = os.path.join(model_dir, "model.xml")
         
-        try:
-            core = ov.Core()
-            print(f"Reading model: {self.model_xml}")
-            model = core.read_model(model=self.model_xml)
-            self.compiled_model = core.compile_model(model=model, device_name=device)
-            self.input_layer = self.compiled_model.input(0)
-            self.output_layer = self.compiled_model.output(0)
-            print("✓ OpenVINO model compiled")
-        except Exception as e:
-            print(f"✗ Failed to load OpenVINO model: {e}")
-            raise e
-        
-        # Load Bias Map
-        bias_path = os.path.join(self.model_dir, "bias_map_final.npy")
-        if os.path.exists(bias_path):
-            try:
-                self.bias_map = np.load(bias_path)
-                print(f"✓ Loaded bias map from {bias_path} with shape {self.bias_map.shape}")
-            except Exception as e:
-                print(f"⚠ Failed to load bias map: {e}")
-                self.bias_map = None
-        else:
-            print(f"WARNING: Bias map not found at {bias_path}. processing without it.")
-            self.bias_map = None
+        if not os.path.exists(model_xml):
+            raise FileNotFoundError(f"Model file not found: {model_xml}")
 
-        # Load Threshold Map Zones (New Feature)
-        threshold_map_path = os.path.join(self.model_dir, "threshold_map_zones.npy")
-        if os.path.exists(threshold_map_path):
-            try:
-                self.threshold_map = np.load(threshold_map_path)
-                print(f"✓ Loaded threshold map from {threshold_map_path} with shape {self.threshold_map.shape}")
-                # Set default threshold/margin to 10% if map exists
-                self.threshold = 10.0 
-            except Exception as e:
-                print(f"⚠ Failed to load threshold map: {e}")
-                self.threshold_map = None
+        # Configuração de Cache para arranque rápido nas próximas vezes
+        core.set_property({'CACHE_DIR': os.path.join(model_dir, 'cache')})
+        
+        model = core.read_model(model=model_xml)
+
+        # Otimização para Raspberry Pi 5 (4 Cores)
+        config = {
+            "INFERENCE_NUM_THREADS": "4",
+            "NUM_STREAMS": "1",
+            "PERFORMANCE_HINT": "LATENCY"
+        }
+        self.compiled_model = core.compile_model(model=model, device_name=device, config=config)
+        self.input_layer = self.compiled_model.input(0)
+        self.output_layer = self.compiled_model.output(0)
+        
+        # Load Bias Map (Threshold Map)
+        # Load Bias Map (Threshold Map)
+        bias_path = os.path.join(model_dir, "threshold_map.npy") # Nome atualizado
+        if not os.path.exists(bias_path):
+             # Fallback to standard name
+             bias_path = os.path.join(model_dir, "threshold_map.npy")
+
+        if os.path.exists(bias_path):
+            self.bias_map = np.load(bias_path)
+            if self.bias_map.shape != (448, 448):
+                 self.bias_map = cv2.resize(self.bias_map, (448, 448))
+            print(f"✅ Loaded bias map: {self.bias_map.shape}")
         else:
-            print(f"Info: Threshold map not found at {threshold_map_path}. Using global scalar threshold.")
-            self.threshold_map = None
+            print(f"⚠️ WARNING: Bias map not found at {bias_path}. Using flat threshold.")
+            self.bias_map = np.full((448, 448), 15.0, dtype=np.float32)
+
+        # Carregar máscara da lata (para garantir que fundo é zero)
+        mask_path = "data/can_mask_448x448.png"
+        if os.path.exists(mask_path):
+            self.can_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+            self.can_mask = cv2.resize(self.can_mask, (448, 448)) > 127 # Boolean mask
+            print(f"✅ Loaded can mask for post-processing")
+        else:
+            self.can_mask = None
+            print(f"⚠️ WARNING: Can mask not found at {mask_path}")
+
+        # Kernel de erosão pré-alocado (Otimização de memória)
+        self.erode_kernel = np.ones((3, 3), np.uint8)
+
+    def apply_clahe(self, image):
+        """
+        Applies CLAHE to the L channel of the LAB image.
+        Uses masking to protect black background (L<=5), matching training logic.
+        """
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        
+        # Criamos uma máscara para o CLAHE não atuar no fundo preto
+        mask = (l > 5).astype(np.uint8) * 255 
+        
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        # Aplicamos o CLAHE
+        l_enhanced = clahe.apply(l)
+        
+        # Voltamos a forçar o fundo a preto puro usando a máscara
+        l_final = cv2.bitwise_and(l_enhanced, l_enhanced, mask=mask)
+        
+        limg = cv2.merge((l_final, a, b))
+        return cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
 
     def preprocess(self, image):
         """
-        Resize, normalize and transpose image.
+        CLAHE -> Resize -> Normalize -> Transpose
         """
-        # Resize to 448x448
-        # If image is already 448x448, resize is no-op or safe
-        if image.shape[:2] != self.input_size:
-            resized = cv2.resize(image, self.input_size)
+        t0 = time.time()
+        
+        # 1. Apply CLAHE (with masking)
+        image = self.apply_clahe(image)
+        t_clahe = time.time()
+        
+        # 2. Resize (if necessary)
+        if image.shape[:2] != (448, 448):
+            resized = cv2.resize(image, (448, 448))
         else:
-            resized = image.copy()
+            resized = image 
         
-        # Convert to RGB (OpenCV uses BGR by default)
-        rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        t_resize = time.time()
         
-        # Normalize
-        rgb_image = rgb_image.astype(np.float32) / 255.0
-        rgb_image = (rgb_image - self.mean) / self.std
+        # 3. Convert to RGB & Normalize
+        rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32)
+        rgb_image /= 255.0
+        rgb_image -= self.mean
+        rgb_image /= self.std
         
-        # Transpose to [1, 3, 448, 448]
+        # 4. Transpose to [1, 3, 448, 448]
         input_tensor = np.transpose(rgb_image, (2, 0, 1))
         input_tensor = np.expand_dims(input_tensor, axis=0)
         
-        return input_tensor, resized
-
-    def predict(self, image):
-        """
-        Compatible API for inspection.py
-        Returns: score, is_normal, heatmap
-        """
-        score_raw, clean_map, _ = self.infer(image)
+        t_final = time.time()
         
-        # Get resized image for visualization (needed since we generate a new heatmap)
-        _, resized_image = self.preprocess(image)
-
-        if self.threshold_map is not None:
-             # Zone-based thresholding: Percentage Excess
-             # Logic: Score = Max % that the image exceeds the threshold map
-             # 0% = perfect (or below map), 20% = 20% brighter than map
-             
-             if clean_map.shape == self.threshold_map.shape:
-                 # 1. Calculate Absolute Excess
-                 excess_map = clean_map - self.threshold_map
-                 
-                 # Clip negative values (we only care about excess)
-                 valid_excess = np.maximum(excess_map, 0)
-                 
-                 # 2. Calculate Percentage Excess Map
-                 # Avoid division by zero (though map min is ~28)
-                 pct_excess_map = (valid_excess / (self.threshold_map + 1e-6)) * 100.0
-                 
-                 # 3. Score = Max Percentage Excess
-                 score = np.max(pct_excess_map)
-                 
-                 is_normal = score < self.threshold
-                 
-                 # 4. Visualization
-                 # visualize the VALID EXCESS (absolute or percentage?)
-                 # Visualizing absolute excess might be cleaner for the eye, 
-                 # but percentage is what the score is based on.
-                 # Let's visualize the valid_excess (absolute) so it looks like a standard heatmap
-                 # but only showing the "bad" parts.
-                 heatmap_viz = self.visualize(valid_excess, resized_image)
-                 
-             else:
-                 print(f"⚠ Shape mismatch: clean_map {clean_map.shape} != threshold_map {self.threshold_map.shape}")
-                 score = score_raw
-                 is_normal = score < self.threshold
-                 heatmap_viz = self.visualize(clean_map, resized_image)
-        else:
-            # Legacy scalar threshold
-            score = score_raw
-            is_normal = score < self.threshold
-            heatmap_viz = self.visualize(clean_map, resized_image)
-
-        return score, is_normal, heatmap_viz
+        timings = {
+            'clahe': (t_clahe - t0) * 1000,
+            'resize': (t_resize - t_clahe) * 1000,
+            'norm': (t_final - t_resize) * 1000
+        }
+        
+        return input_tensor, resized, timings
 
     def infer(self, image):
         """
-        Full inference pipeline.
-        Returns: score, clean_map, anomaly_map_viz
+        Pipeline: Preprocess -> OpenVINO -> Diff -> Erosão -> Score
         """
-        # Check input type
-        if image.dtype != np.uint8:
-             # Assuming it might be already normalized?
-             # For safety, if user passes float, maybe we should warn or handle.
-             # But let's assume I fix `inspection.py`.
-             pass
-
         start_time = time.time()
         
-        # Preprocess
-        input_tensor, resized_image = self.preprocess(image)
+        # 1. Preprocess
+        input_tensor, resized_image, timings = self.preprocess(image)
         
-        # Inference
+        # 2. Inference
+        t_start_inf = time.time()
         results = self.compiled_model([input_tensor])[self.output_layer]
+        timings['openvino'] = (time.time() - t_start_inf) * 1000
         
-        # Post-process
+        # 3. Pós-Processamento (A Mágica da Limpeza)
         raw_map = results.squeeze() 
         
-        # Apply Bias Map
-        if self.bias_map is not None:
-            if raw_map.shape != self.bias_map.shape:
-                 # Resize bias map if needed
-                 # This can happen if output is 56x56 but bias is 448x448?
-                 # Bias map `models/bpo_rr125_patchcore_v2/bias_map_final.npy` shape was (56, 56) in my test output.
-                 # Raw map likely (56, 56) or similar.
-                 if raw_map.shape != self.bias_map.shape:
-                      print(f"Warning: Map shape mismatch. Raw: {raw_map.shape}, Bias: {self.bias_map.shape}")
-                      # Try resize bias to match raw
-                      # Skipping for now to avoid errors, or resize bias
-                      pass
-            
-            # clean_map = raw_map - bias_map
-            clean_map = raw_map - self.bias_map
+        # APLICAR O THRESHOLD MAP + NOISE GATE
+        # Fórmula: Erro = Max(Raw - (Map + 2.0), 0)
+        # Isto garante que o ruído de fundo (ex: 1.4) vira Zero.
+        diff_map = np.maximum(raw_map - (self.bias_map + self.noise_gate), 0)
+        
+        # APLICAR MÁSCARA DA LATA (Corta defeitos fora da lata)
+        if self.can_mask is not None:
+             diff_map[~self.can_mask] = 0.0
+        
+        # APLICAR EROSÃO (Remove pixéis isolados/poeira)
+        # Se diff_map for tudo zero, saltamos isto para poupar tempo
+        if np.max(diff_map) > 0:
+            clean_map = cv2.erode(diff_map, self.erode_kernel, iterations=1)
         else:
-            clean_map = raw_map
+            clean_map = diff_map
 
-        # Logic for Anomaly Score
+        # 4. Score Final (Pico Máximo)
         score = np.max(clean_map)
         
-        # Visualization
-        anomaly_map_viz = self.visualize(clean_map, resized_image)
+        timings['total_infer'] = (time.time() - start_time) * 1000
         
-        return score, clean_map, anomaly_map_viz
+        return score, clean_map, resized_image, timings
 
-    def visualize(self, anomaly_map, original_image):
+    def visualize(self, clean_map, bg_image):
         """
-        Overlay heatmap on image.
+        Sobrepõe o mapa de calor na imagem original.
+        Otimizado para velocidade no Raspberry Pi 5.
         """
-        # Normalize anomaly map to 0-255 for visualization
-        am_min = np.min(anomaly_map)
-        am_max = np.max(anomaly_map)
+        # 1. NORMALIZAÇÃO FIXA (O Segredo da Estabilidade)
+        # Em vez de usar o máximo da imagem atual (que faz o ruído brilhar),
+        # usamos um teto fixo. 
+        # - Valores < 4.0 (Threshold) ficarão azuis/cyanos.
+        # - Valores > 10.0 (Defeito) ficarão vermelhos fortes.
+        teto_maximo = 15.0 
         
-        if am_max - am_min > 0:
-            am_norm = (anomaly_map - am_min) / (am_max - am_min)
-        else:
-            am_norm = np.zeros_like(anomaly_map)
+        # Converte 0..15 para 0..255
+        heatmap_norm = np.clip(clean_map / teto_maximo * 255, 0, 255).astype(np.uint8)
+        
+        # 2. COLORMAP (Azul = Frio, Vermelho = Quente)
+        heatmap = cv2.applyColorMap(heatmap_norm, cv2.COLORMAP_JET)
+        
+        # 3. REDIMENSIONAR (Segurança)
+        # Garante que o mapa tem o mesmo tamanho da imagem (caso haja diferenças de arredondamento)
+        if heatmap.shape[:2] != bg_image.shape[:2]:
+            heatmap = cv2.resize(heatmap, (bg_image.shape[1], bg_image.shape[0]))
             
-        am_norm = (am_norm * 255).astype(np.uint8)
-        
-        # Apply colormap
-        heatmap = cv2.applyColorMap(am_norm, cv2.COLORMAP_JET)
-        
-        # Resize heatmap to match original image (448x448)
-        if heatmap.shape[:2] != original_image.shape[:2]:
-            heatmap = cv2.resize(heatmap, (original_image.shape[1], original_image.shape[0]))
-            
-        # Superimpose
-        overlay = cv2.addWeighted(original_image, 0.6, heatmap, 0.4, 0)
+        # 4. BLENDING (Mistura)
+        # 60% Imagem Original + 40% Mapa de Calor
+        # Isto permite ver o rótulo da lata por baixo do "calor"
+        overlay = cv2.addWeighted(bg_image, 0.6, heatmap, 0.4, 0)
         
         return overlay
+
+    def predict(self, image):
+        """
+        API wrapper for inspection_window.py compatibility.
+        Returns: score, is_normal, viz, clean_map, timings
+        """
+        score, clean_map, resized_image, timings = self.infer(image)
+        is_normal = score < self.threshold
+        viz = self.visualize(clean_map, resized_image)
+        return score, is_normal, viz, clean_map, timings
+
+if __name__ == "__main__":
+    import sys
+    
+    # Caminho do modelo (ajusta se necessário)
+    model_path = "models/bpo_rr125_patchcore_resnet50" 
+    
+    if len(sys.argv) < 2:
+        print(f"Usage: python infer.py <image_path>")
+        sys.exit(1)
+        
+    img_path = sys.argv[1]
+    if not os.path.exists(img_path):
+        print("Image not found")
+        sys.exit(1)
+        
+    inferencer = PatchCoreInferencer(model_dir=model_path)
+    
+    # Warmup (Importante no Pi!)
+    print("🔥 Warming up...", end="", flush=True)
+    dummy = np.zeros((448,448,3), dtype=np.uint8)
+    inferencer.infer(dummy)
+    print(" Done.")
+
+    # Inferência Real
+    img = cv2.imread(img_path)
+    score, amap, rez, times = inferencer.infer(img)
+    
+    print(f"\n⏱️  TIMINGS (ms):")
+    print(f"Resize/Norm: {times['resize']+times['norm']:.2f}")
+    print(f"OpenVINO:    {times['openvino']:.2f}")
+    print(f"Total:       {times['total']:.2f}")
+    
+    print(f"\n📊 RESULTADO:")
+    print(f"Score: {score:.4f}")
+    status = "REJEITADO ❌" if score > inferencer.threshold else "APROVADO ✅"
+    print(f"Status: {status}")
+    
+    # Salvar visualização
+    viz = inferencer.visualize(amap, rez)
+    cv2.imwrite("resultado_pi.jpg", viz)
+    print("Visualização salva em 'resultado_pi.jpg'")

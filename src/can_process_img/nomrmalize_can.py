@@ -14,8 +14,8 @@ def prepare_for_autoencoder(img, target_size=(448, 448)):
     # Criamos uma máscara para o CLAHE não atuar no fundo preto
     mask = (l > 5).astype(np.uint8) * 255 
     
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     # Aplicamos o CLAHE
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     l_enhanced = clahe.apply(l)
     
     # Voltamos a forçar o fundo a preto puro usando a máscara

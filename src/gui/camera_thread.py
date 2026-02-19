@@ -2,13 +2,13 @@ from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 import numpy as np
 import cv2
-from ..utils import calculate_sharpness
+from ..utils import calculate_sharpness, calculate_noise_level
 import time
 import queue
 
 class CameraThread(QThread):
-    # Updated Signal: Emits (QImage, sharpness_score, raw_frame_resized)
-    frame_captured = Signal(QImage, float, np.ndarray)
+    # Updated Signal: Emits (QImage, sharpness_score, noise_score, raw_frame_resized)
+    frame_captured = Signal(QImage, float, float, np.ndarray)
     
     def __init__(self, camera, target_size=(640, 480)):
         super().__init__()
@@ -24,6 +24,7 @@ class CameraThread(QThread):
         # Throttling state
         self._frame_count = 0
         self._last_sharpness = 0.0
+        self._last_noise = 0.0
 
     def set_camera_property(self, prop_id, value):
         """Thread-safe way to request a property change"""
@@ -77,9 +78,12 @@ class CameraThread(QThread):
                         self._frame_count += 1
                         if self._frame_count % 3 == 0:
                             score = calculate_sharpness(frame)
+                            noise_score = calculate_noise_level(frame)
                             self._last_sharpness = score
+                            self._last_noise = noise_score
                         else:
                             score = self._last_sharpness
+                            noise_score = self._last_noise
 
                         # Optimization 3: Convert to QImage in Thread (offload UI)
                         try:
@@ -97,7 +101,7 @@ class CameraThread(QThread):
                             qt_image = QImage(rgb.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
                             
                             # Emit QImage directl + raw frame for analysis/saving
-                            self.frame_captured.emit(qt_image, score, frame)
+                            self.frame_captured.emit(qt_image, score, noise_score, frame)
                             self._last_capture_time = now
                         except Exception as e:
                             print(f"Image conversion error: {e}")

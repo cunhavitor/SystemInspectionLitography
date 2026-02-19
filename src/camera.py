@@ -43,9 +43,9 @@ class Camera:
                 # Set initial controls with auto-exposure enabled
                 self.picam.set_controls({
                     "AeEnable": False,  # Enable auto-exposure
-                    "AwbEnable": False,  # Enable auto white balance
                     "Brightness": 0.0,
-                    "Contrast": 1.0
+                    "Contrast": 1.0,
+                    "Sharpness": 1.0
                 })
                 
                 self.picam.start()
@@ -246,6 +246,51 @@ class Camera:
         except Exception as e:
             print(f"Error loading parameters: {e}")
             return False
+    def get_normalized_settings(self):
+        """
+        Returns camera settings normalized to 0-255 range (matching set_property expectations).
+        Useful for syncing UI sliders with Auto-Exposure results.
+        """
+        if self.use_picamera2:
+            try:
+                metadata = self.picam.capture_metadata()
+                
+                # 1. Exposure (ExposureTime in us)
+                # Map: us = 100 + (val/255)*33000
+                # Rev: val = ((us - 100) / 33000) * 255
+                exp_us = metadata.get("ExposureTime", 10000)
+                exp_norm = ((exp_us - 100) / 33000.0) * 255.0
+                exp_norm = np.clip(exp_norm, 0, 255)
+                
+                # 2. Brightness (-1.0 to 1.0) -> (0 to 255)
+                # Map: val = (b + 1) / 2 * 255
+                bright_val = metadata.get("Brightness", 0.0)
+                bright_norm = ((bright_val + 1.0) / 2.0) * 255.0
+                bright_norm = np.clip(bright_norm, 0, 255)
+                
+                # 3. Contrast (0.0 to 2.0) -> (0 to 255)
+                contrast_val = metadata.get("Contrast", 1.0)
+                contrast_norm = (contrast_val / 2.0) * 255.0
+                contrast_norm = np.clip(contrast_norm, 0, 255)
+                
+                # 4. Focus (AnalogueGain 1.0 to 16.0) -> (0 to 255)
+                # Map: gain = 1 + (val/255)*15
+                # Rev: val = ((gain - 1) / 15) * 255
+                gain_val = metadata.get("AnalogueGain", 1.0)
+                focus_norm = ((gain_val - 1.0) / 15.0) * 255.0
+                focus_norm = np.clip(focus_norm, 0, 255)
+                
+                return {
+                    'exposure': int(exp_norm),
+                    'brightness': int(bright_norm),
+                    'contrast': int(contrast_norm),
+                    'focus': int(focus_norm)
+                }
+            except Exception as e:
+                print(f"Error getting normalized settings: {e}")
+                return None
+        return None
+
     def warmup(self, num_frames=30, callback=None):
         """Warmup camera by discarding initial frames to let AE/AWB settle"""
         print(f"Warming up camera ({num_frames} frames)...")

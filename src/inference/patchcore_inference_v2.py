@@ -28,7 +28,14 @@ class PatchCoreInferencer:
         core.set_property({'CACHE_DIR': os.path.join(model_dir, 'cache')})
         
         model = core.read_model(model=model_xml)
-        self.compiled_model = core.compile_model(model=model, device_name=device)
+
+        # Otimização para Raspberry Pi 5 (4 Cores)
+        config = {
+            "INFERENCE_NUM_THREADS": "4",
+            "NUM_STREAMS": "1",
+            "PERFORMANCE_HINT": "LATENCY"
+        }
+        self.compiled_model = core.compile_model(model=model, device_name=device, config=config)
         self.input_layer = self.compiled_model.input(0)
         self.output_layer = self.compiled_model.output(0)
         

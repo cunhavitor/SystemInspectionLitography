@@ -14,6 +14,8 @@ from ..camera import Camera
 from .camera_thread import CameraThread
 from ..can_process_img.align_can import CanAligner
 from ..inference.patchcore_inference_v2 import PatchCoreInferencer
+# from ..inference.rd4ad_inference import RD4ADInferencer # Removed
+# from ..inspection import SELECTED_MODEL  # Removed
 from ..can_process_img.detect_corner import CornerDetector
 from ..can_process_img.rectified_sheet import SheetRectifier
 import json
@@ -126,7 +128,12 @@ class InspectionWorker(QThread):
             acc_clahe = 0
             acc_resize = 0
             acc_norm = 0
+            acc_norm = 0
             acc_ov = 0
+            
+            t_first_can_finish = None
+            
+            print(f"DEBUG: Starting loop for {len(cans)} cans.")
             
             for i, item in enumerate(cans):
                 can_id = item['id']
@@ -253,7 +260,7 @@ class InspectionWorker(QThread):
                 
                 # Draw each line
                 current_y = box_top_y + box_buffer
-                for i, line in enumerate(lines):
+                for line_idx, line in enumerate(lines):
                     # getTextSize return height is from baseline to top. putText y is baseline.
                     (txt_w, txt_h), baseline = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
                     current_y += txt_h # move down by text height
@@ -280,6 +287,11 @@ class InspectionWorker(QThread):
                 qt_partial = QImage(rgb_partial.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
                 
                 current_scores = [log[1] for log in logs]
+                
+                # Check for first can timing
+                if i == 0:
+                     t_first_can_finish = time.time()
+                
                 self.progressive_update.emit(qt_partial, i + 1, len(cans), current_scores)
             
             if defects_saved > 0:
@@ -291,7 +303,8 @@ class InspectionWorker(QThread):
                 'ng': batch_ng,
                 'defect': batch_defect,
                 'quality': batch_quality,
-                'start_time': start_time_str
+                'start_time': start_time_str,
+                't_first_can': t_first_can_finish # Pass back to main thread
             }
             
             # Convert to RGB for UI
@@ -826,16 +839,31 @@ class CanDetailDialog(QDialog):
         self.lbl_heatmap.setScaledContents(True)
         
         if heatmap is not None:
+            print(f"DEBUG: CanDetailDialog Heatmap Shape: {heatmap.shape}, Min: {np.min(heatmap):.4f}, Max: {np.max(heatmap):.4f}")
             # Heatmap is likely float 0-1 or similar. Need to normalize and colorize.
             # Assuming heatmap is pre-processed or raw float map.
             try:
-                # Normalize to 0-255
-                hm_norm = cv2.normalize(heatmap, None, 0, 255, cv2.NORM_MINMAX)
-                hm_uint8 = hm_norm.astype(np.uint8)
-                # Apply colormap (Jet or similar)
-                hm_color = cv2.applyColorMap(hm_uint8, cv2.COLORMAP_JET)
+                # Normalize to 0-255 using fixed ceiling (15.0)
+                teto_maximo = 15.0
+                hm_norm = np.clip(heatmap / teto_maximo * 255, 0, 255).astype(np.uint8)
                 
-                rgb_hm = cv2.cvtColor(hm_color, cv2.COLOR_BGR2RGB)
+                # Apply colormap (Jet)
+                hm_color = cv2.applyColorMap(hm_norm, cv2.COLORMAP_JET)
+                
+                # Create overlay if image exists
+                if image is not None:
+                    # Ensure image size matches heatmap
+                    if image.shape[:2] != hm_color.shape[:2]:
+                        bg_img = cv2.resize(image, (hm_color.shape[1], hm_color.shape[0]))
+                    else:
+                        bg_img = image.copy()
+                    
+                    # Blend: 20% Image + 80% Heatmap
+                    final_display = cv2.addWeighted(bg_img, 0.2, hm_color, 0.8, 0)
+                else:
+                    final_display = hm_color
+
+                rgb_hm = cv2.cvtColor(final_display, cv2.COLOR_BGR2RGB)
                 h, w, ch = rgb_hm.shape
                 qhm = QImage(rgb_hm.data, w, h, ch * w, QImage.Format_RGB888)
                 self.lbl_heatmap.setPixmap(QPixmap.fromImage(qhm))
@@ -1040,18 +1068,28 @@ class InspectionWindow(QMainWindow):
             return False
         
         try:
-            print(f"Loading model for SKU '{sku}' from '{model_dir}'...")
+            print(f"Loading PatchCore model for SKU '{sku}' from '{model_dir}'...")
             self.inferencer = PatchCoreInferencer(model_dir=model_dir)
             
             # Apply user's saved threshold (Limiar Max) to the new model
             if hasattr(self, 'threshold_spinbox'):
                 user_threshold = self.threshold_spinbox.value()
+                # If we are switching to ResNet50 and the threshold is the default 10 (from previous model),
+                # we might want to bump it up because ResNet50 is "hotter".
+                if "resnet50" in model_dir and user_threshold == 10.0:
+                     print("Auto-adjusting threshold for ResNet50 to 25.0")
+                     user_threshold = 25.0
+                     self.threshold_spinbox.setValue(user_threshold)
+                     
                 self.inferencer.threshold = user_threshold
                 print(f"✓ PatchCore model loaded successfully for SKU '{sku}'")
                 print(f"  Default threshold: 10.0 → User threshold: {user_threshold}")
             else:
                 # During initialization, spinbox doesn't exist yet
-                # Threshold will be set later in _setup_ui
+                # Set specific default for ResNet50
+                if "resnet50" in model_dir:
+                    self.inferencer.threshold = 25.0
+                
                 print(f"✓ PatchCore model loaded successfully for SKU '{sku}'")
                 print(f"  Threshold: {self.inferencer.threshold} (will be updated after UI setup)")
             
@@ -1603,6 +1641,10 @@ class InspectionWindow(QMainWindow):
         
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        
+        # Initialize Timing Variables
+        self.trigger_time = None
+        self.first_can_complete_time = None
 
     def _create_kpi_card(self, title, value, bg_color):
         frame = QFrame()
@@ -1707,7 +1749,7 @@ class InspectionWindow(QMainWindow):
             self.video_label.setText(f"Camera Error: {str(e)}")
             self.update_status(f"Error: {str(e)}")
 
-    def update_frame(self, qt_image, sharpness, raw_frame):
+    def update_frame(self, qt_image, sharpness, noise, raw_frame):
         # Update internal frame for capture, but DO NOT update UI (Live View Disabled)
         if self.camera_thread and not self.camera_thread.paused:
             # print("DEBUG: update_frame received") # Too spammy, rely on thread log
@@ -1905,6 +1947,7 @@ class InspectionWindow(QMainWindow):
             # Capture trigger time for first can timing
             import time
             self.trigger_time = time.time()
+            self.first_can_complete_time = None # Reset for this run
             
             # Set flag to capture NEXT available frame in update_frame
             self.pending_inspection = True
@@ -1956,9 +1999,12 @@ class InspectionWindow(QMainWindow):
     def on_progressive_update(self, qt_image, current, total, scores):
         """Update display progressively as cans are inspected"""
         # Capture time when first can completes
-        if current == 1 and self.trigger_time is not None:
-            import time
-            self.first_can_complete_time = time.time()
+        if current == 1:
+            print(f"DEBUG: on_progressive_update called for CAN 1. Trigger: {self.trigger_time}")
+            if self.trigger_time is not None and self.first_can_complete_time is None:
+                import time
+                self.first_can_complete_time = time.time()
+                print(f"DEBUG: First can complete at {self.first_can_complete_time} (Trigger: {self.trigger_time})")
         
         self.update_image_display(qt_image)
         self.update_status(f"A Inspecionar... {current}/{total} latas", 500)
@@ -2031,11 +2077,28 @@ class InspectionWindow(QMainWindow):
         
         self.lbl_stats_avg_time.setText(f"{avg_time:.1f}ms")
         
+        self.lbl_stats_avg_time.setText(f"{avg_time:.1f}ms")
+        
         # Calculate time to first can (trigger to first can analysis complete)
-        if self.trigger_time and self.first_can_complete_time:
-            total_time_to_first = (self.first_can_complete_time - self.trigger_time) * 1000  # Convert to ms
+        # Use timing from worker stats is more reliable
+        t_first = stats.get('t_first_can')
+        
+        print(f"DEBUG: Finished. Trigger: {self.trigger_time}, FirstCan (Stats): {t_first}")
+        
+        # Fallback if None (shouldn't happen if cans > 0)
+        if t_first is None and total_batch > 0:
+             print("DEBUG: t_first is None but batch > 0. Logic error in Worker?")
+        
+        if self.trigger_time is not None and t_first is not None:
+            total_time_to_first = (t_first - self.trigger_time) * 1000  # Convert to ms
             self.lbl_stats_first_can.setText(f"{total_time_to_first:.0f}ms")
+        elif self.trigger_time is not None and self.first_can_complete_time is not None:
+             # Fallback to main thread timing if worker timing is missing
+             print("WARNING: Using main thread timing for first can.")
+             total_time_to_first = (self.first_can_complete_time - self.trigger_time) * 1000
+             self.lbl_stats_first_can.setText(f"{total_time_to_first:.0f}ms")
         else:
+            print(f"DEBUG: First Can Time Missing. Trigger: {self.trigger_time}, t_first(Worker): {t_first}, t_first(Main): {self.first_can_complete_time}")
             self.lbl_stats_first_can.setText("--ms")
         
         # Calculate total inspection time (trigger to all cans complete)
@@ -2100,12 +2163,45 @@ class InspectionWindow(QMainWindow):
                 cv2.rectangle(annotated_sheet, (x1, y1), (x2, y2), color, 2)
                 
                 # Draw Label
-                label = f"#{can_id} {status_text} {score:.2f}"
-                (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-                cv2.rectangle(annotated_sheet, (x1, y1 - 20), (x1 + text_w, y1), color, -1)
+                # Draw Label (Match InspectionWorker styling)
+                label = f"#{can_id} {status_text}\n{score:.2f}"
+                font_scale = 1.2
+                thickness = 2
+                
+                # Split lines
+                lines = label.replace('\r', '').split('\n')
+                
+                # Calculate box size
+                max_width = 0
+                total_height = 0
+                line_heights = []
+                
+                for line in lines:
+                   (txt_w, txt_h), baseline = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                   max_width = max(max_width, txt_w)
+                   h_with_padding = txt_h + baseline + 10
+                   line_heights.append(h_with_padding)
+                   total_height += h_with_padding
+                   
+                # Draw background box
+                box_buffer = 10
+                box_top_y = y1
+                box_bottom_y = y1 + total_height + box_buffer
+                
+                cv2.rectangle(annotated_sheet, (x1, box_top_y), (x1 + max_width + 10, box_bottom_y), color, -1)
+                
                 text_color = (0, 0, 0) if is_normal else (255, 255, 255)
-                cv2.putText(annotated_sheet, label, (x1, y1 - 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1)
+                
+                # Draw each line
+                current_y = box_top_y + box_buffer
+                for i, line in enumerate(lines):
+                    (txt_w, txt_h), baseline = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+                    current_y += txt_h 
+                    
+                    cv2.putText(annotated_sheet, line, (x1 + 5, current_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness)
+                    
+                    current_y += baseline + 10
 
             # Convert to QImage and Display
             rgb_sheet = cv2.cvtColor(annotated_sheet, cv2.COLOR_BGR2RGB)

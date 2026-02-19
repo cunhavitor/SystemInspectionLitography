@@ -131,6 +131,16 @@ class AdjustmentWindow(QMainWindow):
         layout_cam.addWidget(self.sharpness_bar)
         layout_cam.addWidget(self.sharpness_value_label)
         
+        # Noise Meter
+        layout_cam.addWidget(QLabel("Digital Noise Level (Lower is Better):"))
+        self.noise_bar = QProgressBar()
+        self.noise_bar.setRange(0, 20) # Typical range 0-10. >20 is very noisy.
+        self.noise_bar.setTextVisible(True)
+        self.noise_bar.setFormat("%v") # Show value
+        self.noise_value_label = QLabel("Noise: 0.0")
+        layout_cam.addWidget(self.noise_bar)
+        layout_cam.addWidget(self.noise_value_label)
+        
         # Camera Params Sliders (Using helper)
         params_group = QGroupBox("Camera Parameters")
         params_layout = QFormLayout()
@@ -170,6 +180,13 @@ class AdjustmentWindow(QMainWindow):
         btn_save_cam = QPushButton("Save Camera Params")
         btn_save_cam.clicked.connect(self.save_camera_params)
         layout_cam.addWidget(btn_save_cam)
+
+        # Auto Calibrate Button
+        self.btn_auto_cal = QPushButton("⚡ Auto Calibrate")
+        self.btn_auto_cal.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold; padding: 6px;")
+        self.btn_auto_cal.clicked.connect(self.start_auto_calibration)
+        layout_cam.addWidget(self.btn_auto_cal)
+
         
         # Freeze Button
         self.btn_toggle_view = QPushButton("Show Capture (Freeze)")
@@ -548,6 +565,68 @@ class AdjustmentWindow(QMainWindow):
         msg = "Parameters Loaded" if params else "Default Parameters Applied"
         self.status_bar.showMessage(msg, 3000)
 
+    def start_auto_calibration(self):
+        """
+        1. Enable Auto-Exposure (Slider 0)
+        2. Wait 3 seconds for camera to settle
+        3. Read back hardware values -> Sliders
+        """
+        if not self.camera or not self.camera_thread:
+            return
+
+        self.status_bar.showMessage("⏳ Calibrating... Please wait...", 5000)
+        self.btn_auto_cal.setEnabled(False)
+        self.exposure_slider.setEnabled(False)
+        
+        # 1. Enable Auto Exposure (Set slider to 0)
+        self.exposure_slider.setValue(0) 
+        
+        # 2. Wait 3-4 seconds (using Timer to avoid freezing UI)
+        QTimer.singleShot(4000, self.finish_auto_calibration)
+        
+    def finish_auto_calibration(self):
+        """Read back values from camera and update sliders"""
+        try:
+            # 3. Read normalized settings (0-255) from backend
+            # We access the camera instance directly. Thread contention is minimal 
+            # as this is a read-only metadata check.
+            settings = self.camera.get_normalized_settings()
+            
+            if settings:
+                print(f"DEBUG: Auto-Calibrated Settings: {settings}")
+                
+                # Update Sliders (Block signals to prevent re-triggering set_property via UI path)
+                def sync_ui_backend(slider, prop_id, val):
+                    # 1. Update UI (Visual Sync)
+                    slider.blockSignals(True)
+                    slider.setValue(int((val / 255.0) * 100)) # Convert backend (0-255) to UI (0-100)
+                    slider.blockSignals(False)
+                    
+                    # 2. Update Backend (Explicit Lock-in)
+                    # We must explicitly send the 'val' (0-255) to the backend to disable Auto-mode
+                    # and set the specific manual value.
+                    if self.camera_thread:
+                        self.camera_thread.set_camera_property(prop_id, val)
+                
+                # Exposure: Switch from 0 (Auto) to Fixed Value
+                sync_ui_backend(self.exposure_slider, cv2.CAP_PROP_EXPOSURE, settings['exposure'])
+                
+                # Update others
+                sync_ui_backend(self.contrast_slider, cv2.CAP_PROP_CONTRAST, settings['contrast'])
+                sync_ui_backend(self.brightness_slider, cv2.CAP_PROP_BRIGHTNESS, settings['brightness'])
+                sync_ui_backend(self.focus_slider, cv2.CAP_PROP_FOCUS, settings['focus'])
+                
+                self.status_bar.showMessage("✅ Calibration Complete! Settings Locked.", 3000)
+            else:
+                self.status_bar.showMessage("⚠ Failed to read camera settings", 4000)
+                
+        except Exception as e:
+            self.status_bar.showMessage(f"Calibration Error: {e}", 4000)
+            print(f"Auto-Cal Error: {e}")
+        finally:
+            self.btn_auto_cal.setEnabled(True)
+            self.exposure_slider.setEnabled(True)
+
     def toggle_resolution(self, state):
         self.is_high_res = (state == Qt.CheckState.Checked.value)
         if self.camera_thread:
@@ -805,11 +884,52 @@ class AdjustmentWindow(QMainWindow):
         self.sharpness_bar.setValue(0)
         self.sharpness_value_label.setText("Score: 0.0 (Reset)")
 
-    def update_frame(self, qt_image, sharpness_score, raw_frame):
+    def update_frame(self, qt_image, sharpness_score, noise_score, raw_frame):
         """Called by CameraThread when a new frame is available"""
         # qt_image is now a QImage passed directly from the thread
         if qt_image is not None and not qt_image.isNull():
             pixmap = QPixmap.fromImage(qt_image)
+            
+            # --- OVERLAY NOISE METER ---
+            from PySide6.QtGui import QPainter, QColor, QFont
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Background Box
+            margin = 10
+            box_width = 160
+            box_height = 80
+            # Bottom-Right Corner position
+            x = pixmap.width() - box_width - margin
+            y = pixmap.height() - box_height - margin
+            
+            # Semi-transparent background
+            painter.fillRect(x, y, box_width, box_height, QColor(0, 0, 0, 150))
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawRect(x, y, box_width, box_height)
+            
+            # Determine Color based on Noise Level
+            if noise_score < 3.0:
+                color = QColor(0, 255, 0) # Green
+            elif noise_score < 8.0:
+                color = QColor(255, 235, 59) # Yellow
+            else:
+                color = QColor(255, 0, 0) # Red
+                
+            # Text: "Noise Level"
+            font = QFont("Arial", 10)
+            painter.setFont(font)
+            painter.setPen(QColor(200, 200, 200))
+            painter.drawText(x + 10, y + 25, "Digital Noise:")
+            
+            # Text: Value
+            font_val = QFont("Arial", 24, QFont.Bold)
+            painter.setFont(font_val)
+            painter.setPen(color)
+            painter.drawText(x + 10, y + 65, f"{noise_score:.2f}")
+            
+            painter.end()
+            # ---------------------------
             
             # Use custom widget set_frame
             self.video_display.set_frame(pixmap)
@@ -846,6 +966,21 @@ class AdjustmentWindow(QMainWindow):
             self.sharpness_value_label.setText(
                 f"Score: {sharpness_score:.1f} / Peak: {self.max_focus_score:.1f}"
             )
+            
+            # 6. Update Noise Meter
+            self.noise_bar.setValue(min(int(noise_score), 20))
+            self.noise_value_label.setText(f"Noise: {noise_score:.2f}")
+            
+            # Color Coding (Low is Good)
+            if noise_score < 3.0:
+                # Green (Excellent)
+                self.noise_bar.setStyleSheet("QProgressBar::chunk { background-color: #4caf50; }")
+            elif noise_score < 8.0:
+                # Yellow (Acceptable)
+                self.noise_bar.setStyleSheet("QProgressBar::chunk { background-color: #ffeb3b; }")
+            else:
+                # Red (High Noise)
+                self.noise_bar.setStyleSheet("QProgressBar::chunk { background-color: #f44336; }")
 
     def run_resize_step(self):
         """Update Resizer params and show preview of first can"""
