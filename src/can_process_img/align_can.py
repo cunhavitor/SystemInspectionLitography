@@ -18,13 +18,16 @@ class CanAligner:
     CANNY_LOW = 25
     CANNY_HIGH = 121
     BLUR_SIZE = 1
-    SIFT_FEATURES = 1000
+    SIFT_FEATURES = 1500
     RATIO_TEST = 0.75
     SCALE_MIN = 0.8
     SCALE_MAX = 1.3
     MIN_GOOD_MATCHES = 10
-    ECC_ITERATIONS = 100
+    ECC_ITERATIONS = 200
     ECC_EPSILON = 1e-7
+    # Reject ECC warp when cc < this – a bad ECC solution is worse than SIFT alone.
+    # Observed: good cans cc ≈ 0.69-0.73 | bad alignment cc ≈ 0.44-0.57
+    MIN_ECC_CC = 0.58
 
     def __init__(self, reference_image_path, target_size=(448, 448)):
         self.target_size = target_size
@@ -74,10 +77,12 @@ class CanAligner:
             can_crop: Imagem BGR do crop da lata
             
         Returns:
-            Imagem BGR alinhada e mascarada (448x448)
+            Tuple (aligned_image, is_aligned)
+            - aligned_image: Imagem BGR alinhada e mascarada (448x448)
+            - is_aligned: True se o alinhamento SIFT foi bem sucedido, False caso contrário
         """
         if can_crop is None:
-            return None
+            return None, False
 
         # Resize input → 448x448
         input_resized = cv2.resize(can_crop, (self.ref_w, self.ref_h))
@@ -86,6 +91,7 @@ class CanAligner:
         # STAGE 1: SIFT + AffinePartial2D (Coarse)
         # =============================================
         coarse_aligned, sift_confidence = self._sift_align(input_resized)
+        is_aligned = sift_confidence > 0.0
 
         # =============================================
         # STAGE 2: Aplicar máscara fixa
@@ -107,7 +113,7 @@ class CanAligner:
         if result.shape[:2] != self.target_size:
             result = cv2.resize(result, self.target_size)
 
-        return result
+        return result, is_aligned
 
     def _sift_align(self, input_img):
         """Stage 1: Alinhamento grosseiro via SIFT feature matching."""
@@ -162,7 +168,11 @@ class CanAligner:
 
         # Aplicar transformação
         # Confiança = inlier_ratio (>0.7 = excelente, skip ECC)
-        return cv2.warpAffine(input_img, A, (self.ref_w, self.ref_h)), inlier_ratio
+        # Use BORDER_REPLICATE so we don't introduce hard black edges that trigger the anomaly model
+        return cv2.warpAffine(
+            input_img, A, (self.ref_w, self.ref_h), 
+            borderMode=cv2.BORDER_REPLICATE
+        ), inlier_ratio
 
     def _ecc_fine_align(self, coarse_aligned, masked_input):
         """Stage 3: Ajuste fino via ECC EUCLIDEAN."""
@@ -189,9 +199,15 @@ class CanAligner:
             print(f"[Align] ECC: dx={fine_dx:.2f}, dy={fine_dy:.2f}, "
                   f"angle={fine_angle:.2f}°, cc={cc:.4f}")
 
+            # Quality gate: reject ECC warp if convergence was poor
+            if cc < self.MIN_ECC_CC:
+                print(f"[Align] ECC: cc={cc:.4f} < {self.MIN_ECC_CC} – rejecting ECC, keeping SIFT result")
+                return coarse_aligned
+
             return cv2.warpAffine(
                 coarse_aligned, warp_matrix, (self.ref_w, self.ref_h),
-                flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
+                flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP,
+                borderMode=cv2.BORDER_REPLICATE
             )
 
         except cv2.error as e:

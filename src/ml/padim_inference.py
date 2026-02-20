@@ -69,6 +69,20 @@ class PadimInferencer:
             print(f"✅ Loaded statistical model. Grid: {H}x{W}, Channels: {C}")
         else:
             raise FileNotFoundError("PaDiM statistics (mean.npy, inv_cov.npy) not found!")
+        
+        # Load Can Mask (optional, to ignore areas outside the can)
+        mask_path = 'data/can_mask_448x448.png'
+        if os.path.exists(mask_path):
+            mask_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+            # Ensure mask is exactly 448x448
+            if mask_img.shape != (448, 448):
+                mask_img = cv2.resize(mask_img, (448, 448), interpolation=cv2.INTER_NEAREST)
+            # Binary mask: 1 inside can, 0 outside
+            self.can_mask = (mask_img > 128).astype(np.float32)
+            print(f"✅ Can mask loaded from {mask_path} (shape: {self.can_mask.shape})")
+        else:
+            self.can_mask = None
+            print(f"⚠️  Can mask not found at {mask_path}. Inspecting full image.")
 
     def preprocess(self, image):
         # Resize -> Normalize -> Transpose
@@ -142,6 +156,10 @@ class PadimInferencer:
         
         # Gaussian Blur (Optimized kernel)
         anomaly_map = cv2.GaussianBlur(anomaly_map, (7, 7), 0)
+        
+        # Apply Can Mask (zero out anomaly scores outside the can)
+        if self.can_mask is not None:
+            anomaly_map = anomaly_map * self.can_mask
         
         # Score
         score = np.max(anomaly_map)

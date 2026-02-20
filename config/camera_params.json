@@ -1,6 +1,9 @@
 {
     "exposure": 255,
     "brightness": 153,
-    "contrast": 224,
-    "focus": 71
+    "contrast": 219,
+    "focus": 66,
+    "awb_gains_r": 2.751,
+    "awb_gains_b": 2.0291,
+    "saturation": 1.0
 }

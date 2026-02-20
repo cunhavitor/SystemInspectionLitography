@@ -40,19 +40,28 @@ class Camera:
                 
                 self.picam.configure(config)
                 
-                # Set initial controls with auto-exposure enabled
+                # Start with AE and AWB both ON so colours look natural.
+                # In calibration the user sees the real image.
+                # AWB will be locked to saved values only when load_parameters() is called
+                # (inspection / dataset mode).
                 self.picam.set_controls({
-                    "AeEnable": False,  # Enable auto-exposure
+                    "AeEnable": True,
+                    "AwbEnable": True,
                     "Brightness": 0.0,
                     "Contrast": 1.0,
-                    "Sharpness": 1.0
+                    "Sharpness": 1.0,
+                    "Saturation": 1.0,
                 })
                 
                 self.picam.start()
                 
-                # Give camera time to settle
+                # Give camera time to settle before applying saved params
                 import time
                 time.sleep(0.5)
+                
+                # Immediately apply saved camera params (locks AWB off with calibrated gains).
+                # If no params file exists, camera stays in AWB-ON state (fine for first use).
+                self.load_parameters()
                 
                 print("Picamera2 initialized with Dual Streams (main + lores)")
             except Exception as e:
@@ -240,6 +249,18 @@ class Camera:
             self.set_property(cv2.CAP_PROP_BRIGHTNESS, params.get('brightness', 0))
             self.set_property(cv2.CAP_PROP_CONTRAST, params.get('contrast', 0))
             self.set_property(cv2.CAP_PROP_FOCUS, params.get('focus', 0))
+            
+            # Always keep AWB and auto-colour disabled after loading saved params
+            if self.use_picamera2:
+                rg  = params.get('awb_gains_r', 1.0)
+                bg  = params.get('awb_gains_b', 1.0)
+                sat = params.get('saturation', 1.0)
+                self.picam.set_controls({
+                    "AwbEnable": False,
+                    "ColourGains": (float(rg), float(bg)),
+                    "Saturation": float(sat),
+                })
+                print(f"AWB+AutoColour disabled | ColourGains R={rg:.2f} B={bg:.2f} | Saturation={sat:.2f}")
             
             print(f"Camera parameters loaded from {filepath}")
             return params

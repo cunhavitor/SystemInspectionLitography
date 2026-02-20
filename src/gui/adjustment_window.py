@@ -473,7 +473,7 @@ class AdjustmentWindow(QMainWindow):
             self.pending_ui_updates.clear()
 
     def save_camera_params(self):
-        """Save slider values directly to JSON"""
+        """Save slider values + current AWB gains to JSON"""
         base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         filepath = os.path.join(base_dir, 'config', 'camera_params.json')
         
@@ -482,11 +482,25 @@ class AdjustmentWindow(QMainWindow):
         
         # Read current slider positions
         params = {
-            'exposure': to_backend(self.exposure_slider.value()) if hasattr(self, 'exposure_slider') else 0,
+            'exposure':   to_backend(self.exposure_slider.value())   if hasattr(self, 'exposure_slider')   else 0,
             'brightness': to_backend(self.brightness_slider.value()) if hasattr(self, 'brightness_slider') else 128,
-            'contrast': to_backend(self.contrast_slider.value()) if hasattr(self, 'contrast_slider') else 128,
-            'focus': to_backend(self.focus_slider.value()) if hasattr(self, 'focus_slider') else 20
+            'contrast':   to_backend(self.contrast_slider.value())   if hasattr(self, 'contrast_slider')   else 128,
+            'focus':      to_backend(self.focus_slider.value())       if hasattr(self, 'focus_slider')       else 20,
         }
+        
+        # Capture current AWB colour gains and saturation from the live camera.
+        # These are saved so inspection/dataset can lock the same values.
+        if self.camera and hasattr(self.camera, 'use_picamera2') and self.camera.use_picamera2:
+            try:
+                metadata = self.camera.picam.capture_metadata()
+                rg, bg = metadata.get('ColourGains', (1.5, 1.5))
+                sat    = metadata.get('Saturation',   1.0)
+                params['awb_gains_r'] = round(float(rg),  4)
+                params['awb_gains_b'] = round(float(bg),  4)
+                params['saturation']  = round(float(sat), 4)
+                print(f"AWB snapshot → R={rg:.4f}  B={bg:.4f}  Sat={sat:.4f}")
+            except Exception as e:
+                print(f"Could not read AWB metadata: {e}")
         
         # Save to file
         os.makedirs(os.path.dirname(filepath), exist_ok=True)

@@ -13,7 +13,7 @@ from PySide6.QtGui import QImage, QPixmap, QFont, QColor
 from ..camera import Camera
 from .camera_thread import CameraThread
 from ..can_process_img.align_can import CanAligner
-from ..inference.patchcore_inference_v2 import PatchCoreInferencer
+from ..inference.efficientad_inference import EfficientAdInferencer
 # from ..inference.rd4ad_inference import RD4ADInferencer # Removed
 # from ..inspection import SELECTED_MODEL  # Removed
 from ..can_process_img.detect_corner import CornerDetector
@@ -147,8 +147,9 @@ class InspectionWorker(QThread):
                 
                 # B. Align (REQUIRED for accurate scores)
                 t_align_0 = time.time()
+                is_aligned = True
                 if self.aligner:
-                    aligned_can = self.aligner.align(resized_can)
+                    aligned_can, is_aligned = self.aligner.align(resized_can)
                 else:
                     aligned_can = resized_can
                 acc_align += (time.time() - t_align_0) * 1000
@@ -177,7 +178,21 @@ class InspectionWorker(QThread):
                 
                 heatmap = None # Initialize heatmap
                 
-                if brightness > brightness_threshold:
+                if not is_aligned:
+                    # Alignment failed completely (SIFT match too low)
+                    batch_quality += 1
+                    batch_ng += 1
+                    color = (255, 0, 0)  # Blue bbox for alignment failure (BGR format)
+                    status_text = "NOK-ALIGN"
+                    score = 999.0  # Special score
+                    is_normal = False
+                    can_duration = (time.time() - can_start_time) * 1000
+                    
+                    defect_filename = f"{defects_dir}/NOK_ALIGN_{timestamp}_can{can_id:02d}.png"
+                    cv2.imwrite(defect_filename, normalized_can)
+                    defects_saved += 1
+                    
+                elif brightness > brightness_threshold:
                     # Too bright - likely bad crop or missing can
                     batch_quality += 1
                     batch_ng += 1
@@ -197,15 +212,15 @@ class InspectionWorker(QThread):
                         self.error.emit("PatchCore model not loaded!")
                         return
                         
-                    # Use aligned_can (Inferencer V2 handles CLAHE+Resize+Norm internaly)
-                    score, is_normal, viz, heatmap, infer_timings = self.inferencer.predict(aligned_can)
+                    # Use normalized_can (CLAHE applied) – matches training data pipeline
+                    score, is_normal, viz, heatmap, infer_timings = self.inferencer.predict(normalized_can, can_id=can_id)
                     #print(f"DEBUG: Can #{can_id} Score: {score:.8f}")
                     
-                    acc_infer += infer_timings['total_infer']
-                    acc_clahe += infer_timings['clahe']
-                    acc_resize += infer_timings['resize']
-                    acc_norm += infer_timings['norm']
-                    acc_ov += infer_timings['openvino']
+                    acc_infer += infer_timings.get('total_infer', infer_timings.get('total', 0))
+                    acc_clahe += infer_timings.get('clahe', infer_timings.get('preprocess', 0))
+                    acc_resize += infer_timings.get('resize', 0)
+                    acc_norm += infer_timings.get('norm', infer_timings.get('mahalanobis', 0))
+                    acc_ov += infer_timings.get('openvino', 0)
                     
                     can_duration = (time.time() - can_start_time) * 1000
                     
@@ -978,13 +993,16 @@ class InspectionWindow(QMainWindow):
 
 
 
-        # Load Inferencer (PatchCore)
+        # Load Inferencer (EfficientAD)
         self.inferencer = None
         try:
-            self.inferencer = PatchCoreInferencer()
-            print(f"✓ PatchCore Inferencer loaded. Threshold: {self.inferencer.threshold}")
+            self.inferencer = EfficientAdInferencer(
+                model_dir="models/bpo_rr125_efficientAD_M",
+                threshold=0.5,
+            )
+            print(f"✓ EfficientAD Inferencer loaded. Threshold: {self.inferencer.threshold}")
         except Exception as e:
-            print(f"Failed to load PatchCore: {e}")
+            print(f"Failed to load EfficientAD: {e}")
             from PySide6.QtWidgets import QMessageBox
             
         # Load Sheet Processors
@@ -1039,10 +1057,10 @@ class InspectionWindow(QMainWindow):
         Args:
             sku: SKU identifier (e.g., 'Bom Petisco Oleo - rr125', 'Bom Petisco Azeite - rr125', 'Bom Petisco Azeite - rr125')
         """
-        # Map SKU to model directory
+        # Map SKU to model directory (EfficientAD)
         sku_model_map = {
-            'Bom Petisco Oleo - rr125': 'models/bpo_rr125_patchcore_resnet50',
-            'Bom Petisco Azeite - rr125': 'models/bpAz_rr125_patchcore_v2'
+            'Bom Petisco Oleo - rr125': 'models/bpo_rr125_efficientAD_M',
+            'Bom Petisco Azeite - rr125': 'models/bpo_rr125_efficientAD_M'
         }
         
         # Map SKU to reference image for alignment
@@ -1055,8 +1073,8 @@ class InspectionWindow(QMainWindow):
         ref_path = sku_reference_map.get(sku)
         
         if model_dir is None:
-            print(f"WARNING: Unknown SKU '{sku}'. Using default model.")
-            model_dir = 'models/bpo_rr125_patchcore_resnet50'
+            print(f"WARNING: Unknown SKU '{sku}'. Using default EfficientAD model.")
+            model_dir = 'models/bpo_rr125_efficientAD_M'
             ref_path = 'models/can_reference/aligned_can_reference448_bpo-rr125.png'
         
         if not os.path.exists(model_dir):
@@ -1068,30 +1086,17 @@ class InspectionWindow(QMainWindow):
             return False
         
         try:
-            print(f"Loading PatchCore model for SKU '{sku}' from '{model_dir}'...")
-            self.inferencer = PatchCoreInferencer(model_dir=model_dir)
+            print(f"Loading EfficientAD model for SKU '{sku}' from '{model_dir}'...")
+            self.inferencer = EfficientAdInferencer(model_dir=model_dir)
             
-            # Apply user's saved threshold (Limiar Max) to the new model
+            # Apply user's saved threshold to the new model
             if hasattr(self, 'threshold_spinbox'):
                 user_threshold = self.threshold_spinbox.value()
-                # If we are switching to ResNet50 and the threshold is the default 10 (from previous model),
-                # we might want to bump it up because ResNet50 is "hotter".
-                if "resnet50" in model_dir and user_threshold == 10.0:
-                     print("Auto-adjusting threshold for ResNet50 to 25.0")
-                     user_threshold = 25.0
-                     self.threshold_spinbox.setValue(user_threshold)
-                     
                 self.inferencer.threshold = user_threshold
-                print(f"✓ PatchCore model loaded successfully for SKU '{sku}'")
-                print(f"  Default threshold: 10.0 → User threshold: {user_threshold}")
+                print(f"✓ EfficientAD model loaded for SKU '{sku}' with threshold {user_threshold}")
             else:
-                # During initialization, spinbox doesn't exist yet
-                # Set specific default for ResNet50
-                if "resnet50" in model_dir:
-                    self.inferencer.threshold = 25.0
-                
-                print(f"✓ PatchCore model loaded successfully for SKU '{sku}'")
-                print(f"  Threshold: {self.inferencer.threshold} (will be updated after UI setup)")
+                print(f"✓ EfficientAD model loaded for SKU '{sku}'. Threshold: {self.inferencer.threshold}")
+                print(f"  (threshold will be updated after UI setup)")
             
             # Load SKU-specific reference image for alignment
             if ref_path and os.path.exists(ref_path):
@@ -2518,22 +2523,46 @@ class InspectionWindow(QMainWindow):
                 if h_map.dtype != np.float32 and h_map.dtype != np.uint8:
                      h_map = h_map.astype(np.float32)
 
-                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(h_map)
+                # We only want to circle regions that are actually above the "NG" threshold.
+                # The normalizer ceiling in visualization is (threshold * 1.5).
+                # We'll threshold the raw anomaly map directly.
                 
-                # Convert original image to BGR for drawing if not already
-                # Actually image here is usually RGB from QImage conversion logic? 
-                # Let's assume it's an numpy array, likely RGB or BGR.
-                # If it comes from 'image' key in results_data, it's the cropped numpy array (BGR usually)
+                # Make sure threshold is respected
+                _, binary_map = cv2.threshold(h_map, threshold, 255.0, cv2.THRESH_BINARY)
+                binary_map = binary_map.astype(np.uint8)
+                
+                # Group nearby defects together by dilating and closing the mask
+                merge_kernel = np.ones((100, 100), np.uint8) # Adjust size to change merge distance
+                binary_map = cv2.morphologyEx(binary_map, cv2.MORPH_CLOSE, merge_kernel)
+                
+                # Find distinct blobs/contours of defects
+                contours, _ = cv2.findContours(binary_map, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
                 display_img = image.copy()
                 
-                # If heatmap is smaller/larger, we might need to scale coordinates?
-                # Usually both are 448x448.
-                
-                # Draw Circle
-                cv2.circle(display_img, max_loc, 40, (0, 0, 255), 3) # Red Circle, Radius 40
-                
-                # Optional: Crosshair
-                # cv2.drawMarker(display_img, max_loc, (0, 0, 255), markerType=cv2.MARKER_CROSS, thickness=2)
+                if contours:
+                    for contour in contours:
+                        # Only draw circle if the blob has some minimal area (filter out tiny 1px noise)
+                        if cv2.contourArea(contour) > 10:
+                            # Find the center of the blob
+                            M = cv2.moments(contour)
+                            if M["m00"] != 0:
+                                cx = int(M["m10"] / M["m00"])
+                                cy = int(M["m01"] / M["m00"])
+                            else:
+                                # Fallback to bounding box center
+                                x, y, w, h = cv2.boundingRect(contour)
+                                cx, cy = x + w//2, y + h//2
+                                
+                            # Calculate an approximate radius based on blob size, with a minimum
+                            _, radius = cv2.minEnclosingCircle(contour)
+                            draw_radius = max(40, int(radius) + 10) # Minimum 40 to match original look
+                                
+                            cv2.circle(display_img, (cx, cy), draw_radius, (0, 0, 255), 3) # Red Circle
+                else:
+                    # Fallback if no contours found despite status="NG" (e.g. very diffuse but high anomaly)
+                    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(h_map)
+                    cv2.circle(display_img, max_loc, 40, (0, 0, 255), 3) # Red Circle, Radius 40
                 
             except Exception as e:
                 print(f"Error drawing defect circle: {e}")

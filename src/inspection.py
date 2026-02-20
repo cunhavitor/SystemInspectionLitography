@@ -7,15 +7,11 @@ from .can_process_img.detect_corner import CornerDetector
 from .can_process_img.rectified_sheet import SheetRectifier
 from .can_process_img.crop_cans import CanCropper
 from .can_process_img.align_can import CanAligner
-from .inference.patchcore_inference_v2 import PatchCoreInferencer
-from .inference.patchcore_inference_v2 import PatchCoreInferencer
-
+from .inference.efficientad_inference import EfficientAdInferencer
 
 # Configuration for Model Selection
-# Options: "RD4AD", "PATCHCORE"
-# SELECTED_MODEL = "PATCHCORE" # Deprecated, defaulted to PatchCore
-
-
+# Options: "RD4AD", "PATCHCORE", "PADIM"
+# SELECTED_MODEL = "PADIM" 
 
 def apply_clahe(image):
     """
@@ -72,17 +68,15 @@ def run_inspection_mode(config):
             print(f"✓ Can Aligner loaded with reference: {ref_path}")
         except Exception as e:
             print(f"⚠ Failed to load aligner: {e}")
-    # Load Model (Always PatchCore now)
+    # Load Model (EfficientAD)
     try:
-        print(f"Loading PatchCore Model from {model_dir}...")
-        inferencer = PatchCoreInferencer(model_dir=model_dir)
-        inferencer.threshold = 2.0 # Default
+        print("Loading EfficientAD Model...")
+        inferencer = EfficientAdInferencer(
+            model_dir="models/bpo_rr125_efficientAD_M",
+            threshold=0.5,
+        )
     except Exception as e:
-        print(f"Error loading model: {e}")
-        return
-
-    except Exception as e:
-        print(f"✗ Failed to load {SELECTED_MODEL} model: {e}")
+        print(f"✗ Failed to load EfficientAD model: {e}")
         print("Inspection will not work without model!")
         cam.release()
         return
@@ -194,21 +188,37 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
             
             # 1. ALINHAMENTO
             t_align_0 = time.time()
+            is_aligned = True # Predefinição se não houver aligner
+            
             if aligner:
-                aligned_can = aligner.align(can_img)
+                aligned_can, is_aligned = aligner.align(can_img)
             else:
                 aligned_can = can_img
             acc_align += (time.time() - t_align_0) * 1000
+            
+            # Se o alinhamento falhar, ignoramos a inferência e reprovamos logo
+            if not is_aligned:
+                ng_count += 1
+                color = (255, 0, 0) # Azul (formato BGR)
+                status = "BAD ALIGN"
+                score = 0.0 # Pontuação irreal para marcar defeito de sistema
+                
+                # Desenhar na folha imediatamente
+                x1, y1, x2, y2 = bbox
+                cv2.rectangle(annotated_sheet, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(annotated_sheet, f"{status}", (x1, y1-5), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                continue # Pular para a próxima lata!
             
             # 3. INFERÊNCIA
             # Passamos a imagem RAW ALINHADA. O inferencer faz CLAHE + Resize.
             score, is_normal, heatmap, clean_map, infer_metrics = inferencer.predict(aligned_can)
             
-            acc_infer += infer_metrics['total_infer']
-            acc_clahe += infer_metrics['clahe']
-            acc_resize += infer_metrics['resize']
-            acc_norm += infer_metrics['norm']
-            acc_ov += infer_metrics['openvino']
+            acc_infer += infer_metrics.get('total_infer', infer_metrics.get('total', 0))
+            acc_clahe += infer_metrics.get('clahe', 0)
+            acc_resize += infer_metrics.get('resize', 0)
+            acc_norm += infer_metrics.get('norm', 0)
+            acc_ov += infer_metrics.get('openvino', 0)
             
             # DEBUG: Ver se o score baixou para valores normais (0 a 5)
             # print(f"    DEBUG: Can #{can_id} Score: {score:.4f}")
@@ -238,12 +248,6 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
                 if aligner:
                     img_to_save = prepare_for_autoencoder(aligned_can, target_size=(448, 448))
                 else:
-                    # If no aligner, we assume crop is raw, so we might need resize? 
-                    # Dataset pipeline: Raw -> Resize -> Align -> Prepare
-                    # Inspection pipeline: Raw -> Aligner -> Predict
-                    # Here we have 'aligned_can'.
-                    # prepare_for_autoencoder does NOT resize (it assumes 448x448 input roughly or handles color).
-                    # Actually prepare_for_autoencoder takes 'img' and does CLAHE. It doesn't resize.
                     img_to_save = prepare_for_autoencoder(can_img, target_size=(448, 448))
 
                 timestamp = now.strftime("%Y%m%d_%H%M%S")

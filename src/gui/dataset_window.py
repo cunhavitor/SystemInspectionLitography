@@ -320,11 +320,12 @@ class DatasetWindow(QMainWindow):
             self.camera_thread = CameraThread(self.camera)
             self.camera_thread.frame_captured.connect(self.update_frame)
             self.camera_thread.start()
-            self.camera.load_parameters()
+            # Camera params (incl. AWB lock) are loaded inside Camera.__init__ automatically.
+            
         except Exception as e:
             self.status_bar.showMessage(f"Error: {str(e)}")
 
-    def update_frame(self, qt_image, sharpness, raw_frame):
+    def update_frame(self, qt_image, sharpness, noise_score, raw_frame):
         if qt_image is not None and not qt_image.isNull():
             self.video_label.setPixmap(QPixmap.fromImage(qt_image))
         
@@ -491,8 +492,8 @@ class DatasetWindow(QMainWindow):
                 else:
                     aligned = resized
                 
-                # Normalize
-                normalized = prepare_for_autoencoder(aligned, target_size=(448, 448))
+                # Normalize with CLAHE (same as training)
+                final_can = prepare_for_autoencoder(aligned, target_size=(448, 448))
                 
                 # Increment global can counter
                 self.global_can_counter += 1
@@ -501,10 +502,10 @@ class DatasetWindow(QMainWindow):
                 # Validate (if reference available)
                 if self.reference_image is not None:
                     is_good, reason = is_image_good_for_dataset(
-                        normalized, 
+                        final_can, 
                         self.reference_image,
-                        min_sharpness=50,  # Lower threshold for dataset collection
-                        check_alignment=True  # Enable alignment check with resized reference
+                        min_sharpness=50,
+                        check_alignment=True
                     )
                     if is_good:
                         # Good image -> save to train folder
@@ -530,12 +531,12 @@ class DatasetWindow(QMainWindow):
                 # Save with global can number
                 filename = f'can{can_number:03d}.png'
                 filepath = os.path.join(folder, filename)
-                cv2.imwrite(filepath, normalized)
+                cv2.imwrite(filepath, final_can)
                 processed_cans.append(filepath)
                 
                 # DEBUG: Log brightness for first 5 cans to verify consistency
                 if can_idx < 5:
-                    brightness = np.mean(normalized)
+                    brightness = np.mean(final_can)
                     print(f"[DATASET] Can {can_number:03d} - Brightness: {brightness:.2f}, Folder: {folder.split('/')[-1]}")
                 
                 # Update progress bar
