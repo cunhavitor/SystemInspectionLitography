@@ -15,19 +15,19 @@ class CanAligner:
     """
 
     # Parâmetros fixos (validados interativamente)
-    CANNY_LOW = 25
-    CANNY_HIGH = 121
-    BLUR_SIZE = 1
-    SIFT_FEATURES = 1500
+    CANNY_LOW = 40
+    CANNY_HIGH = 220
+    BLUR_SIZE = 3
+    SIFT_FEATURES = 500
     RATIO_TEST = 0.75
     SCALE_MIN = 0.8
-    SCALE_MAX = 1.3
+    SCALE_MAX = 1.2
     MIN_GOOD_MATCHES = 10
     ECC_ITERATIONS = 200
     ECC_EPSILON = 1e-7
     # Reject ECC warp when cc < this – a bad ECC solution is worse than SIFT alone.
-    # Observed: good cans cc ≈ 0.69-0.73 | bad alignment cc ≈ 0.44-0.57
-    MIN_ECC_CC = 0.58
+    # Observed: good cans cc ≈ 0.69-0.73 | bad alignment cc ≈ 0.44-0.62
+    MIN_ECC_CC = 0.62
 
     def __init__(self, reference_image_path, target_size=(448, 448)):
         self.target_size = target_size
@@ -65,7 +65,10 @@ class CanAligner:
         # 5. Pré-calcular referência mascarada para ECC
         ref_masked = cv2.bitwise_and(self.ref_img, self.ref_img, mask=self.mask)
         ref_masked_gray = cv2.cvtColor(ref_masked, cv2.COLOR_BGR2GRAY)
-        ref_edges = cv2.Canny(ref_masked_gray, self.CANNY_LOW, self.CANNY_HIGH)
+        
+        # Apply blur to remove high-frequency noise that throws off ECC
+        ref_blurred = cv2.GaussianBlur(ref_masked_gray, (self.BLUR_SIZE, self.BLUR_SIZE), 0)
+        ref_edges = cv2.Canny(ref_blurred, self.CANNY_LOW, self.CANNY_HIGH)
         self.ref_edges_f = ref_edges.astype(np.float32) / 255.0
 
         print(f"[Align] CanAligner initialized: ref={self.ref_w}x{self.ref_h}, mask loaded")
@@ -101,7 +104,7 @@ class CanAligner:
         # =============================================
         # STAGE 3: ECC EUCLIDEAN Fine-tuning (skip se SIFT já é excelente)
         # =============================================
-        if sift_confidence < 0.7:
+        if sift_confidence < 0.2:
             fine_aligned = self._ecc_fine_align(coarse_aligned, masked)
         else:
             fine_aligned = coarse_aligned
@@ -178,8 +181,9 @@ class CanAligner:
         """Stage 3: Ajuste fino via ECC EUCLIDEAN."""
         masked_gray = cv2.cvtColor(masked_input, cv2.COLOR_BGR2GRAY)
 
-        # Canny edges
-        input_edges = cv2.Canny(masked_gray, self.CANNY_LOW, self.CANNY_HIGH)
+        # Apply blur to remove high-frequency noise that throws off ECC
+        input_blurred = cv2.GaussianBlur(masked_gray, (self.BLUR_SIZE, self.BLUR_SIZE), 0)
+        input_edges = cv2.Canny(input_blurred, self.CANNY_LOW, self.CANNY_HIGH)
         input_edges_f = input_edges.astype(np.float32) / 255.0
 
         warp_matrix = np.eye(2, 3, dtype=np.float32)
@@ -199,9 +203,9 @@ class CanAligner:
             print(f"[Align] ECC: dx={fine_dx:.2f}, dy={fine_dy:.2f}, "
                   f"angle={fine_angle:.2f}°, cc={cc:.4f}")
 
-            # Quality gate: reject ECC warp if convergence was poor
-            if cc < self.MIN_ECC_CC:
-                print(f"[Align] ECC: cc={cc:.4f} < {self.MIN_ECC_CC} – rejecting ECC, keeping SIFT result")
+            # Quality gate: reject ECC warp if convergence was poor or drift was too large
+            if cc < self.MIN_ECC_CC or abs(fine_dx) > 3.0 or abs(fine_dy) > 3.0:
+                print(f"[Align] ECC: cc={cc:.4f}, dx={fine_dx:.1f}, dy={fine_dy:.1f} – rejecting ECC, keeping SIFT result")
                 return coarse_aligned
 
             return cv2.warpAffine(

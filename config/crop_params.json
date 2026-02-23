@@ -1,7 +1,7 @@
 {
     "first_can_center_x_mm": 61.32,
     "first_can_center_y_mm": 79.05,
-    "step_x_mm": 129.60000000000002,
-    "step_y_mm": 132.19,
+    "step_x_mm": 129.55,
+    "step_y_mm": 132.35,
     "tolerance_box_mm": 12.0
 }

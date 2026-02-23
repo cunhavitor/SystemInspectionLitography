@@ -86,19 +86,18 @@ class EfficientAdInferencer:
         if os.path.exists(mask_path):
             mask_img = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
             
-            # The Colab simulation script exactly uses:
-            # mask = cv2.resize(mask, (448, 448)).astype(np.float32) / 255.0
+            # CRITICAL: Always resize the mask to match the 448x448 model output
             mask_img = cv2.resize(mask_img, (448, 448))
             
-            # Erode the mask inwards to ignore the outermost edges where 
-            # alignment artifacts (cv2.BORDER_REPLICATE) and lighting reflections occur.
-            # Reduced to 5x5 (~1% edge erosion) to avoid ignoring real defects on the rim
-            erode_kernel = np.ones((5, 5), np.uint8)
+            # Erode the mask inwards to ignore the outermost 5% of the radius 
+            # (224px radius * 5% = ~12px per side).
+            # A 25x25 kernel erodes exactly 12 pixels from every direction.
+            erode_kernel = np.ones((25, 25), np.uint8)
             mask_img = cv2.erode(mask_img, erode_kernel, iterations=1)
             
             # Float mask in [0, 1] so arith. multiplication suppresses background
             self.can_mask = mask_img.astype(np.float32) / 255.0
-            print(f"✅ Can mask loaded from '{mask_path}' and eroded inwards.")
+            print(f"✅ Can mask loaded from '{mask_path}' and eroded inwards by 5%.")
         else:
             self.can_mask = None
             print(f"⚠️  No mask found in '{model_dir}' or 'data/'. Inspecting full image.")
@@ -193,13 +192,16 @@ class EfficientAdInferencer:
         if self.DEBUG_INFER:
             print(f"{tag} AFTER_RESIZE max={anomaly_map.max():.4f} mean={anomaly_map.mean():.4f}")
 
-        # c) Diagnóstico separado (antes do Blur) para ver manchas falsas (ghost zones)
-        # Assumindo que a falha esteja, por exemplo, algures num quadrante. Podem ajustar isto!
-        zona_fantasma = anomaly_map[100:200, 100:200]
-        print(f"DEBUG - Valor na zona fantasma (100:200): {zona_fantasma.mean():.6f}")
+        # Static Noise Floor:
+        # ResNet18 creates a baseline of structural "ghosts" on the can body.
+        # Zero out anything below this floor to create a clean background.
+        # We SUBTRACT the floor from the survivors so that a pixel of 0.81 becomes a faint 0.01 
+        # instead of jumping abruptly on the heatmap at full 0.81 force.
+        noise_floor = 0.8
+        anomaly_map = np.where(anomaly_map < noise_floor, 0, anomaly_map - noise_floor)
 
         # d) Gaussian blur – suppress isolated noise pixels
-        anomaly_map = cv2.GaussianBlur(anomaly_map, (21, 21), 0)
+        anomaly_map = cv2.GaussianBlur(anomaly_map, (11, 11), 0)
         print(f"DEBUG POST-PROCESS - After Blur: Min={anomaly_map.min():.6f}, Max={anomaly_map.max():.6f}, Mean={anomaly_map.mean():.6f}")
 
         if self.DEBUG_INFER:
@@ -221,12 +223,12 @@ class EfficientAdInferencer:
         anomaly_map *= AMPLIFY_FACTOR
 
         # 6. Peak score — use the average of the top N pixels.
-        # np.max is too sensitive to 1 or 2 noise pixels (specular reflections).
-        # 99.9th percentile (>200 pixels) smoothed out small structural defects.
-        # Averaging the top 100 pixels strikes the perfect balance: 
-        # it ignores isolated noise but spikes for concentrated small defects.
+        # np.max is too sensitive to 1-pixel jitter from alignment interpolation, causing
+        # the same physical defect to score 1.6 in one frame and 2.4 in the exact next frame.
+        # Averaging the top 30 pixels provides a robust score for small 50-pixel defects
+        # while absorbing any single pixel anomalies caused by digital noise.
         flat_map = anomaly_map.flatten()
-        top_pixels = np.sort(flat_map)[-100:]
+        top_pixels = np.sort(flat_map)[-30:]
         score = float(np.mean(top_pixels))
         
         # No Pi e no Colab
@@ -234,6 +236,7 @@ class EfficientAdInferencer:
         
         if self.DEBUG_INFER:
             print(f"{tag} FINAL SCORE = {score:.4f}  "
+                  f"[max={float(np.max(anomaly_map)):.4f}, p99.9={score:.4f}]  "
                   f"(threshold={self.threshold})")
 
         timings["total_infer"] = (time.time() - t_start) * 1000

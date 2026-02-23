@@ -1550,6 +1550,9 @@ class InspectionWindow(QMainWindow):
         self.ax = self.figure.add_subplot(111)
         self.ax.set_facecolor('#0D1117')
         
+        self.graph_y_max = 10.0
+        self.canvas.mpl_connect('scroll_event', self.on_graph_scroll)
+        
         # Initial empty plot styling
         self.ax.spines['bottom'].set_color('none')
         self.ax.spines['top'].set_color('none') 
@@ -1564,6 +1567,7 @@ class InspectionWindow(QMainWindow):
         
         # Initial X Axis setup 1-50
         self.ax.set_xlim(0.5, 50.5)
+        self.ax.set_ylim(0, self.graph_y_max)
         
         self.ax.set_title("Pontuações", color='#E6EDF3', fontsize=10)
         
@@ -2314,9 +2318,23 @@ class InspectionWindow(QMainWindow):
         
         # X Axis setup 1-50 explicitly
         self.ax.set_xlim(0.5, 50.5)
+        self.ax.set_ylim(0, self.graph_y_max)
         
         # Labels
         self.ax.set_title(f"Score Distribution (Max: {max(scores) if scores else 0:.1f})", color='#E6EDF3', fontsize=9)
+        self.canvas.draw()
+
+    def on_graph_scroll(self, event):
+        """Handle mouse scroll on the bar chart to adjust Y-axis scale"""
+        if event.inaxes != self.ax:
+            return
+            
+        if event.button == 'up':       # Scroll up (zoom in)
+            self.graph_y_max = max(1.0, self.graph_y_max - 1.0)
+        elif event.button == 'down':   # Scroll down (zoom out)
+            self.graph_y_max += 1.0
+            
+        self.ax.set_ylim(0, self.graph_y_max)
         self.canvas.draw()
 
     def open_logs_dialog(self):
