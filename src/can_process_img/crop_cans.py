@@ -65,10 +65,10 @@ class CanCropper:
                     self.tolerance_box_mm = params.get('tolerance_box_mm', self.tolerance_box_mm)
                     
                     self.update_pixel_values()
-                print(f"Crop params loaded from {filepath}")
+                # print(f"Crop params loaded from {filepath}")
                 return True
             except Exception as e:
-                print(f"Error loading crop params: {e}")
+                # print(f"Error loading crop params: {e}")
                 return False
         return False
 
@@ -85,10 +85,10 @@ class CanCropper:
             }
             with open(filepath, 'w') as f:
                 json.dump(params, f, indent=4)
-            print(f"Crop params saved to {filepath}")
+            # print(f"Crop params saved to {filepath}")
             return True
         except Exception as e:
-            print(f"Error saving crop params: {e}")
+            # print(f"Error saving crop params: {e}")
             return False
     
 
@@ -148,6 +148,13 @@ class CanCropper:
                 # Extrair a lata
                 if x2 > x1 and y2 > y1:
                     can_image = rectified_image[y1:y2, x1:x2]
+                    
+                    # DEBUG: Save crops for the first row to visually inspect the grid drift
+                    if row == 0:
+                        debug_dir = "debug_crops"
+                        os.makedirs(debug_dir, exist_ok=True)
+                        cv2.imwrite(f"{debug_dir}/can_{col+1}_row0_crop.png", can_image)
+                        print(f"[DEBUG CROP] Row 0, Col {col+1}: BBox X: {x1}->{x2} (width {x2-x1}), Y: {y1}->{y2} (height {y2-y1})")
                     
                     # Calcular ID (1-based)
                     can_id = row * self.cols + col + 1

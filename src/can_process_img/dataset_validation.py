@@ -48,7 +48,7 @@ def is_image_good_for_dataset(img, ref_img, threshold_mse=0.8, min_sharpness=50,
                 return False, f"Alignment ({max_val:.2f} < 0.50)"
         except Exception as e:
             # If alignment check fails, just warn but don't reject
-            print(f"Alignment check failed: {e}, accepting image anyway")
+            pass # print(f"Alignment check failed: {e}, accepting image anyway")
 
     # 4. Verificar Reflexos Especulares
     is_specular_ok, spec_reason = check_specular_reflection(img)

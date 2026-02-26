@@ -9,7 +9,7 @@ def main():
     project_root = "/home/cunhav/projects/InspectionVisionCamera"
     image_folder = os.path.join(project_root, "data/raw_sheet_crops")
     ref_path = os.path.join(project_root, "models/can_reference/aligned_can_reference448_bpo-rr125.png")
-    mask_path = os.path.join(project_root, "data/can_mask_448x448.png")
+    mask_path = cv2.resize(os.path.join(project_root, "data/can_mask_448x448.png"), (448, 448), interpolation=cv2.INTER_NEAREST)
     
     # Load reference image
     ref_img = cv2.imread(ref_path)

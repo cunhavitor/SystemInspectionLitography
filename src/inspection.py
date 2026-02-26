@@ -220,8 +220,19 @@ def inspect_frame(frame, detector, rectifier, cropper, aligner, inferencer):
             acc_norm += infer_metrics.get('norm', 0)
             acc_ov += infer_metrics.get('openvino', 0)
             
-            # DEBUG: Ver se o score baixou para valores normais (0 a 5)
-            # print(f"    DEBUG: Can #{can_id} Score: {score:.4f}")
+            # DEBUG: Imprimir score e info de alinhamento
+            align_dbg = ""
+            if aligner and hasattr(aligner, 'last_align_info'):
+                info = aligner.last_align_info
+                if info.get('sift'):
+                    s = info['sift']
+                    align_dbg += f"| SIFT: {s['inliers']} inliers ({s['inlier_ratio']:.0%}), scale={s['scale']:.3f}, angle={s['angle']:.1f}° "
+                if info.get('ecc'):
+                    e = info['ecc']
+                    rej = " [REJECTED]" if info.get('ecc_rejected') else ""
+                    align_dbg += f"| ECC: dx={e['dx']:.2f}, dy={e['dy']:.2f}, cc={e['cc']:.4f}{rej}"
+                    
+            print(f"    [DEBUG] Can #{can_id} | Score: {score:.4f} {align_dbg}")
             
             if is_normal:
                 ok_count += 1

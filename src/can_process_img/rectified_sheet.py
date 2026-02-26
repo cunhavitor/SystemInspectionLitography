@@ -22,7 +22,7 @@ class SheetRectifier:
         # Medidas reais em milímetros
         self.sheet_width_mm = 1026.54
         self.sheet_height_mm = 819.0
-        self.sheet_skew_mm = 60.54  # Offset horizontal de TL para BL
+        self.sheet_skew_mm = 60.90  # Offset horizontal de TL para BL
         self.margin_mm = 30.0       # Margem extra em toda a volta
         self.pixels_per_mm = pixels_per_mm
         
@@ -62,9 +62,9 @@ class SheetRectifier:
         physical_slant_height_mm = np.sqrt(self.sheet_height_mm**2 + self.sheet_skew_mm**2)
         px_per_mm_y = avg_height_px / physical_slant_height_mm
         
-        print(f"[Rectifier] Scale X (Width): {px_per_mm_x:.4f} px/mm")
-        print(f"[Rectifier] Slant Height mm: {physical_slant_height_mm:.2f}")
-        print(f"[Rectifier] Scale Y (Edge): {px_per_mm_y:.4f} px/mm")
+        # print(f"[Rectifier] Scale X (Width): {px_per_mm_x:.4f} px/mm")
+        # print(f"[Rectifier] Slant Height mm: {physical_slant_height_mm:.2f}")
+        # print(f"[Rectifier] Scale Y (Edge): {px_per_mm_y:.4f} px/mm")
         
         # LOGIC CHANGE: Implement Anisotropic Scaling to fix X vs Y drift
         # User confirmed Y steps are correct with Y-based scale, but X steps are wrong.
@@ -119,10 +119,10 @@ class SheetRectifier:
                     self.margin_mm = params.get('margin_mm', self.margin_mm)
                     
                     self.update_pixel_values()
-                print(f"Rect params loaded from {filepath}")
+                # print(f"Rect params loaded from {filepath}")
                 return True
             except Exception as e:
-                print(f"Error loading rect params: {e}")
+                # print(f"Error loading rect params: {e}")
                 return False
         return False
 
@@ -140,10 +140,10 @@ class SheetRectifier:
             }
             with open(filepath, 'w') as f:
                 json.dump(params, f, indent=4)
-            print(f"Rect params saved to {filepath}")
+            # print(f"Rect params saved to {filepath}")
             return True
         except Exception as e:
-            print(f"Error saving rect params: {e}")
+            # print(f"Error saving rect params: {e}")
             return False
 
     def rectify(self, image, corners):

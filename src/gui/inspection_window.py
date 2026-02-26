@@ -157,11 +157,10 @@ class InspectionWorker(QThread):
                 # C. Normalize with CLAHE
                 normalized_can = self.normalizer(aligned_can, target_size=(448, 448))
                 
-                # DEBUG: Log/Save if it's one of the first 3 cans OR specifically can 1
-                if i < 3 or can_id == 1:
-                    # cv2.imwrite(f'debug_pi_can{can_id:02d}_1_raw_crop.png', can_img)
-                    # cv2.imwrite(f'debug_pi_can{can_id:02d}_2_resized.png', resized_can)
-                    # cv2.imwrite(f'debug_pi_can{can_id:02d}_3_aligned.png', aligned_can)
+                # DEBUG: Save ALIGNED crops for the first row to visually inspect ECC drift
+                if i < 8:
+                    os.makedirs('debug_crops', exist_ok=True)
+                    cv2.imwrite(f'debug_crops/can_{can_id}_row0_aligned.png', aligned_can)
                     # cv2.imwrite(f'debug_pi_can{can_id:02d}_4_normalized.png', normalized_can)
                     
                     print(f"\n=== CAN {can_id} PREPROCESSING DEBUG ===")
@@ -213,7 +212,12 @@ class InspectionWorker(QThread):
                         return
                         
                     # Use normalized_can (CLAHE applied) – matches training data pipeline
-                    score, is_normal, viz, heatmap, infer_timings = self.inferencer.predict(normalized_can, can_id=can_id)
+                    align_data = self.aligner.last_align_info if hasattr(self.aligner, 'last_align_info') else None
+                    score, is_normal, viz, heatmap, infer_timings = self.inferencer.predict(
+                        normalized_can, 
+                        can_id=can_id,
+                        align_info=align_data
+                    )
                     #print(f"DEBUG: Can #{can_id} Score: {score:.8f}")
                     
                     acc_infer += infer_timings.get('total_infer', infer_timings.get('total', 0))
@@ -2509,81 +2513,9 @@ class InspectionWindow(QMainWindow):
         threshold = self.threshold_spinbox.value()
         status = "OK" if score <= threshold else "NG"
         
-        # Prepare image for display: Draw Defect Circle if Heatmap provided
+        # Prepare image for display (Removed Red Defect Circles per request)
         image = item.get('image')
-        heatmap = item.get('heatmap')
-        
         display_img = image
-        if heatmap is not None and status == "NG":
-            try:
-                # Find location of max anomaly in heatmap
-                # Heatmap is 448x448 float array
-                h_map = heatmap
-                # print(f"DEBUG: Heatmap shape: {h_map.shape}, type: {h_map.dtype}")
-
-                if len(h_map.shape) > 2:
-                    h_map = h_map.squeeze() 
-                
-                # If still 3 dims, take first channel or max across channels? 
-                # Usually it's (H, W). If (H, W, 3), that's wrong for a single heatmap.
-                if len(h_map.shape) == 3:
-                     # If RGB heatmap was passed (mistake), convert to gray?
-                     # But PatchCore returns (1, H, W) usually.
-                     if h_map.shape[0] == 1:
-                         h_map = h_map[0]
-                     elif h_map.shape[2] == 1:
-                         h_map = h_map[:, :, 0]
-                     else:
-                         # Fallback: take max across channels
-                         h_map = np.max(h_map, axis=2)
-
-                # Ensure float32 or uint8
-                if h_map.dtype != np.float32 and h_map.dtype != np.uint8:
-                     h_map = h_map.astype(np.float32)
-
-                # We only want to circle regions that are actually above the "NG" threshold.
-                # The normalizer ceiling in visualization is (threshold * 1.5).
-                # We'll threshold the raw anomaly map directly.
-                
-                # Make sure threshold is respected
-                _, binary_map = cv2.threshold(h_map, threshold, 255.0, cv2.THRESH_BINARY)
-                binary_map = binary_map.astype(np.uint8)
-                
-                # Group nearby defects together by dilating and closing the mask
-                merge_kernel = np.ones((100, 100), np.uint8) # Adjust size to change merge distance
-                binary_map = cv2.morphologyEx(binary_map, cv2.MORPH_CLOSE, merge_kernel)
-                
-                # Find distinct blobs/contours of defects
-                contours, _ = cv2.findContours(binary_map, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                display_img = image.copy()
-                
-                if contours:
-                    for contour in contours:
-                        # Only draw circle if the blob has some minimal area (filter out tiny 1px noise)
-                        if cv2.contourArea(contour) > 10:
-                            # Find the center of the blob
-                            M = cv2.moments(contour)
-                            if M["m00"] != 0:
-                                cx = int(M["m10"] / M["m00"])
-                                cy = int(M["m01"] / M["m00"])
-                            else:
-                                # Fallback to bounding box center
-                                x, y, w, h = cv2.boundingRect(contour)
-                                cx, cy = x + w//2, y + h//2
-                                
-                            # Calculate an approximate radius based on blob size, with a minimum
-                            _, radius = cv2.minEnclosingCircle(contour)
-                            draw_radius = max(40, int(radius) + 10) # Minimum 40 to match original look
-                                
-                            cv2.circle(display_img, (cx, cy), draw_radius, (0, 0, 255), 3) # Red Circle
-                else:
-                    # Fallback if no contours found despite status="NG" (e.g. very diffuse but high anomaly)
-                    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(h_map)
-                    cv2.circle(display_img, max_loc, 40, (0, 0, 255), 3) # Red Circle, Radius 40
-                
-            except Exception as e:
-                print(f"Error drawing defect circle: {e}")
 
         dlg = CanDetailDialog(
             can_id=item['can_id'],

@@ -27,10 +27,10 @@ class CornerDetector:
                     self.margin_right = params.get('margin_right', self.margin_right)
                     self.dist_TL_BL = params.get('dist_TL_BL', self.dist_TL_BL)
                     self.dist_TR_BR = params.get('dist_TR_BR', self.dist_TR_BR)
-                print(f"Corner params loaded from {filepath}")
+                # print(f"Corner params loaded from {filepath}")
                 return True
             except Exception as e:
-                print(f"Error loading corner params: {e}")
+                # print(f"Error loading corner params: {e}")
                 return False
         return False
 
@@ -50,10 +50,10 @@ class CornerDetector:
             }
             with open(filepath, 'w') as f:
                 json.dump(params, f, indent=4)
-            print(f"Corner params saved to {filepath}")
+            # print(f"Corner params saved to {filepath}")
             return True
         except Exception as e:
-            print(f"Error saving corner params: {e}")
+            # print(f"Error saving corner params: {e}")
             return False
 
     def detect(self, image):
